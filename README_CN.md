@@ -1,376 +1,178 @@
 # ComfyUI MiniMax H3 时间线导演台
 
+简体中文 · [English](README.md)
+
+首选入口是 [**MiniMaxH3 全功能合一完全体导演台工作流**](example_workflows/MiniMaxH3全功能合一完全体导演台工作流.json)：
+一套轻量工作流同时覆盖文生视频、参考图生视频、参考音频驱动、视频编辑、人物替换、动作迁移、数字人以及手动分段长视频生成，无需为不同任务更换节点图。
+
+## 核心能力：轻量级无限时长视频生成
+
+插件可以把任意目标时长拆成多个连续片段，在一次 ComfyUI 执行中自动完成逐段生成、
+所有分段使用同一个种子、上一段 AV Latent 尾部续接、自适应 Drift-Control 视频遮罩、Soft AV 音频连续性、重叠帧去除以及最终音画合并。
+只需增加分段数量即可继续延长视频，不依赖已被关闭的通用 Loop PR，也不需要在画布上
+手工复制多套采样节点。实际可生成长度只受本机显存、内存、磁盘空间及 ComfyUI 单次执行能力限制。
+
+长视频数字人可将独立音频设为**原音锁定**。插件会按时间线切分原始波形，并通过原生 AV Latent
+的 mask/sigma 路径逐段注入，让人物口型继续受音频驱动，同时最终成片完整保留上传的原始音频，不重新生成或改写声音。
+
+[下载全功能合一工作流](example_workflows/MiniMaxH3全功能合一完全体导演台工作流.json) ·
+[使用说明](docs/FINITE_SEGMENT_EXPANSION_CN.md) ·
+[分段提示词 Agent 规范](docs/MiniMax_H3_循环分段提示词_Agent规范.md)
+
+[![轻量级无限时长工作流](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/infinite-workflow.webp)](example_workflows/MiniMaxH3全功能合一完全体导演台工作流.json)
+
+### 约一分钟直接生成案例
+
+下面两段均为插件一次执行直接生成的 `52.625 秒 / 1263 帧 / 24fps` 成片。点击缩略图播放或下载原始 MP4；
+视频和缩略图存放在 GitHub Release，不会增加插件克隆与安装体积。
+
+| 案例一：有限分段 Latent 续写 | 案例二：参考素材 + 48 帧重叠续写 |
+| --- | --- |
+| [![播放案例一](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/case-finite-segments-60s.webp)](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/H3_finite_segments_60s.mp4) | [![播放案例二](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/case-reference-overlap-60s.webp)](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/H3_reference_overlap48_60s.mp4) |
+
 <p align="center">
-  <img src="docs/images/creator-wecom.webp" alt="创作者企业微信联系卡片" width="420">
+  <img src="docs/images/creator-wecom.webp" alt="创作者企业微信联系卡片" width="360">
 </p>
 
 <p align="center">
   作者：<strong>石兄松 / Shi Xiongsong</strong><br>
-  <a href="https://space.bilibili.com/219572544?spm_id_from=333.40164.0.0">哔哩哔哩主页</a>
+  <a href="https://space.bilibili.com/219572544?spm_id_from=333.40164.0.0">哔哩哔哩</a>
   ·
-  <a href="https://www.youtube.com/@shixiongsong">YouTube主页</a>
+  <a href="https://www.youtube.com/@shixiongsong">YouTube</a>
 </p>
 
-简体中文 · [English](README.md)
+一个为 ComfyUI 原生 **MiniMax H3 Reference to Video** 工作流设计的可视化参考素材时间线。它将参考视频、视频原声、固定 Guide、独立图片和独立音频集中到一个类似剪辑软件的界面中。
 
-这是一个面向 ComfyUI 原生 **MiniMax H3 Reference to Video** 工作流的可编辑参考素材时间线节点。
+> 视频生成 Agent 请阅读：[长视频分段生成 Agent 操作规范](docs/AGENT_LONG_VIDEO_GUIDE_CN.md)
 
-它把原本需要在工作流中分别处理的参考视频、视频原声、裁剪区间、自动边界帧、独立图片和独立音频集中到一个导演台界面。用户可以像使用简化版剪辑软件一样移动、裁剪和分割视频，通过低清监看寻找合适画面，再由节点在执行时自动组装准确的H3参考输入。
+## 主要功能
 
-> 本插件要求较新的ComfyUI版本，并且该版本已经包含原生 `MiniMaxH3ReferenceToVideo` 节点。
+- 多视频时间线：移动、裁剪、分段、删除、吸附和精确数值定位。
+- 青色生成选区：只有与选区重叠的素材区间参与本次视频参考或 Guide。
+- 三种视频用途：`固定Guide`、`可编辑参考`、`仅固定边界`。
+- 纯文生视频：不上传任何素材且不启用分段时，素材规划台的全局提示词与当前 GEN 时长会由有限分段采样内部创建标准 H3 空 AV latent；启用手动时间框后也可生成文生长视频。
+- 原声同步：视频移动和裁剪时原声保持绑定，也可关闭视频原声参考。
+- 低清预览：最高 `480×270 / 12fps` 无声代理，红色播放头可拖动预览。
+- 独立素材箱：图片和音频支持多选、外部拖入、删除及拖拽排序；全局图片库与音频库不限制上传总数，
+  每个实际生成分段仍遵循 MiniMax H3 的上限，最多使用 9 张参考图和 3 段参考音频。
+- 原音锁定：支持长视频数字人和人物唱歌，按分段锁定 AV Latent，并在最终合并时保持源音频内容不变。
+- 稳定编号：界面中的 `<Picture 1>`、`<Video 1>`、`<Audio 1>` 与 H3 输入顺序一致。
+- 全局与分段提示词：全局提示词可复用于全部片段；任意分段提示词启用后，全局提示词自动失效且要求补全每一段。
+- 显存保护：素材在解码时按节点 `width × height` 调整分辨率。
+- 音频输出：可分别输出时间线视频原声合并结果和独立参考音频合并结果。
+- 状态保存：时间线编辑状态会写入 ComfyUI 工作流 JSON。
 
-![MiniMax H3时间线导演台工作流全景](docs/images/workflow-overview.webp)
+## 长视频主工作流节点
 
-## 为什么需要这个节点
-
-当参考生视频工作流包含多段视频、局部时间区间、对应原声、首尾参考帧、独立图片和独立音频时，单纯依靠普通ComfyUI节点很难直观管理。时间线导演台将这些准备工作转换成可视化编辑流程：
-
-- 视频素材放在可编辑的视频轨道中；
-- 视频原声自动绑定并跟随视频移动、裁剪和分段；
-- 青色选区定义本次生成和参考区间；
-- 红色播放头控制低清视频监看；
-- 独立图片和独立音频放在各自素材箱；
-- H3提示词编号和底层参考输入自动组装；
-- 编辑后的视频原声与独立音频可作为普通ComfyUI `AUDIO` 输出继续使用。
-
-## 核心亮点
-
-- **多视频可编辑时间线**：支持移动、左右裁剪、分段、删除和精确数值定位。
-- **视频原声自动绑定**：视频移动、裁剪或分段时，对应原声保持同步。
-- **只编码选区重叠内容**：青色选区只覆盖视频一部分时，仅解码和传入这一部分及其对应原声。
-- **自动首尾边界帧**：自动提取选区外侧紧邻的画面，作为H3图片参考。
-- **视频空隙桥接**：选中两段视频之间的空隙时，自动使用左侧最后一帧和右侧第一帧。
-- **一键匹配空隙**：青色选区可以精确填满最近的视频空隙。
-- **边缘吸附**：视频片段、裁剪手柄、青色选区和红色播放头均可吸附到相邻边缘。
-- **低清视频监看**：自动生成最高 `480×270 / 12fps` 的无声代理视频，拖动红线时可以流畅寻找画面。
-- **分辨率和显存保护**：参考帧在解码过程中立即调整到节点 `width × height`，避免整段4K/8K素材以原分辨率堆积。
-- **独立素材稳定编号**：独立图片始终从 `<Picture 1>` 开始，独立音频始终从 `<Audio 1>` 开始。
-- **两个音频输出**：输出按时间轴合成的视频原声，以及按素材箱顺序拼接的独立参考音频。
-- **大文件分块上传**：降低普通HTTP上传大小限制导致失败的概率。
-- **工作流状态保存**：时间线编辑信息会写入ComfyUI工作流JSON，重新打开后可以继续编辑。
-
-## 环境要求
-
-- 包含原生MiniMax H3节点的较新ComfyUI版本。
-- MiniMax H3 Ref2VA对应的扩散模型、文本编码器、视频VAE和音频VAE。
-- Python 3.10或更高版本。
-- ComfyUI Python环境中包含 `imageio-ffmpeg`，用于生成低清预览代理。
-
-插件不额外声明pip依赖，使用兼容ComfyUI通常已经包含的PyAV、Pillow、NumPy、PyTorch、torchaudio、aiohttp和imageio-ffmpeg。
-
-## 安装方法
-
-### 手动安装
-
-1. 在ComfyUI的 `custom_nodes` 目录中克隆仓库：
-
-   ```bash
-   cd ComfyUI/custom_nodes
-   git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
-   ```
-
-2. 重启ComfyUI。
-3. 搜索 **MiniMax H3 时间线导演台** 或 **MiniMax H3 Timeline Director**。
-
-## 快速开始
-
-1. 在MiniMax H3 Ref2VA工作流中添加 **MiniMax H3 时间线导演台**。
-2. 将MiniMax H3文本编码器/CLIP连接到 `clip`。
-3. 将H3视频VAE连接到 `vae`。
-4. 将H3音频VAE连接到 `audio_vae`。
-5. 输入或连接生成提示词。
-6. 设置 `width`、`height` 和 `generation_seconds`。
-7. 使用 **+ 视频**、**+ 图片**、**+ 音频** 添加参考素材。
-8. 移动和裁剪视频片段，将青色选区放到需要生成的位置。
-9. 拖动红色播放头，通过下方监看区寻找准确画面。
-10. 将 `positive` 和 `LATENT` 连接到原有的引导器、采样器链路后运行工作流。
-
-插件附带一个改造后的示例工作流：
-
-```text
-example_workflows/minimax_h3_r2v_时间线导演台.json
-```
-
-## 界面与控件说明
-
-### 顶部工具栏
-
-| 控件 | 功能 |
+| 节点 | 用途 |
 | --- | --- |
-| `+ 视频` | 上传视频并放入时间线，自动检测是否包含原声。 |
-| `+ 图片` | 添加独立参考图片。 |
-| `+ 音频` | 添加独立参考音频。 |
-| `在播放头分段` | 在红色播放头位置分割当前选中的视频片段。 |
-| `删除片段` | 删除当前选中的视频片段。 |
-| `适应全部` | 调整缩放，让视频片段和青色选区完整显示。 |
-| `匹配最近空隙` | 让青色选区精确填满最近的两段视频空隙。 |
+| **MiniMax H3 素材规划台** | 编辑素材并输出紧凑的 `素材规划` 与 `Omni素材包`。 |
+| **MiniMax H3 Omni 素材包提示词桥** | 将规划台素材送入已安装的 Prompt Rewriter Omni，并只输出 `rewritten_prompt`。 |
+| **MiniMax H3 有限分段采样** | 展开普通无环执行图，完成直接 Latent 续写、时间遮罩、采样、去重和合并。 |
+| **MiniMax H3 时间线导演台（兼容）** | 保留原先的一体化工作流和旧工作流兼容性。 |
 
-在视频空隙上双击，也可以执行匹配空隙操作。
+长视频生成只需连接 **素材规划台「分段规划」→ 有限分段采样「有限分段规划」**。
+`MiniMax H3 规划编码器`仍作为内部执行节点注册，以便采样器展开执行图和兼容旧工作流，但不会在新建节点菜单中显示。
 
-### 时间线轨道
-
-- **参考视频**：可以拖动和裁剪的视频片段。
-- **视频原声**：与视频绑定的原始音频波形。
-- **青色选区（GEN）**：本次H3参考和生成时长区间。
-- **红色播放头**：当前监看和分段位置，支持点击定位和按住连续拖动。
-- **黄色吸附线**：发生边缘吸附时显示。
-
-### 精确编辑栏
-
-选中视频片段后，可以精确设置：
-
-- 时间线起点；
-- 源视频入点；
-- 片段长度；
-- 原声绑定状态。
-
-### 低清视频监看
-
-红色播放头位于视频片段上时，监看区会显示对应源时间的画面。点击 **播放预览** 后，代理视频播放并带动红色播放头同步前进。
-
-首次预览会创建缓存代理：
-
-- 最大分辨率：`480×270`；
-- 帧率：`12fps`；
-- 音频：关闭；
-- 用途：仅供界面预览。
-
-最终H3编码仍然读取原始视频和原始声音，不会使用低清代理参与生成。
-
-### 独立参考素材箱
-
-- 独立图片显示为 `<Picture 1>`、`<Picture 2>`……
-- 独立音频显示为 `<Audio 1>`、`<Audio 2>`……
-- 删除素材后，剩余素材会立即重新连续编号。
-- 清空素材箱后重新上传，编号一定从1开始。
-
-## 节点输入
-
-| 输入 | 类型 | 说明 |
-| --- | --- | --- |
-| `clip` | `CLIP` | MiniMax H3兼容的文本编码器/CLIP。 |
-| `vae` | `VAE` | 用于图片和视频参考的MiniMax H3视频VAE。 |
-| `audio_vae` | `VAE` | 用于视频配套原声和独立音频参考的H3音频VAE。 |
-| `prompt` | `STRING` | H3提示词，可使用界面显示的 `<Picture i>`、`<Video k>`、`<Audio j>`。 |
-| `width` | `INT` | 输出宽度，同时也是参考素材分辨率保护目标。 |
-| `height` | `INT` | 输出高度，同时也是参考素材分辨率保护目标。 |
-| `generation_seconds` | `FLOAT` | 生成时长，与青色选区长度双向同步。 |
-| `ref_image_size` | `COMBO` | H3图片参考尺寸策略：`match` 或 `max`。 |
-| `timeline_data` | `STRING` | 隐藏的时间线序列化数据，随工作流保存。 |
-
-## 节点输出
-
-| 输出 | 类型 | 说明 |
-| --- | --- | --- |
-| `positive` | `CONDITIONING` | 包含MiniMax H3参考信息的正向条件。 |
-| `LATENT` | `LATENT` | 与请求时长对齐的MiniMax H3音视频空Latent。 |
-| `视频原声合并` | `AUDIO` | 将所有视频片段的裁剪后原声放到对应时间轴位置；空隙为静音，重叠位置进行混音。 |
-| `独立音频合并` | `AUDIO` | 按独立音频素材箱顺序将多段音频首尾拼接。 |
-
-如果没有可用音频，节点仍会输出合法的静音ComfyUI `AUDIO`。视频没有原声时，视频原声输出会提供与时间线等长的静音。
-
-## 青色选区如何转换成H3参考
-
-### 选区只覆盖视频的一部分
-
-只解码青色选区和视频片段真正重叠的源区间，并同步提取相同时间范围的原声。
-
-示例：一段10秒视频位于 `0–10s`，青色选区为 `2–7s`：
-
-![局部视频选区案例](docs/images/partial-overlap.webp)
-
-- `<Video 1>` 只接收源视频 `2–7s` 的内容，并以24fps采样；
-- 视频配套原声只接收相同的5秒；
-- 自动提取2秒之前和7秒之后紧邻的画面作为边界图片。
-
-### 选区位于两段视频的空隙
-
-- 不会生成一段假的空白参考视频；
-- 左侧视频最后一帧成为左边界图；
-- 右侧视频第一帧成为右边界图。
-
-可以使用 **匹配最近空隙** 完成精确对齐。
-
-### 多段视频和长区间
-
-与选区重叠的视频按照时间线起点排序并依次成为参考视频。超过15秒的单个参考区间会拆分成最长15秒的窗口，最多使用3个视频参考。
-
-## 参考素材编号规则
-
-界面显示和H3内部实际输入使用相同规则：
-
-1. 独立图片首先编号：`<Picture 1..N>`；
-2. 自动边界帧使用后续可用的 `<Picture>` 编号；
-3. 独立音频首先编号：`<Audio 1..N>`；
-4. 视频配套原声使用后续可用的 `<Audio>` 编号；
-5. 选中的视频编号为 `<Video 1..N>`。
-
-例如：1张独立图片、2张自动边界帧、2段独立音频和1段带原声的视频：
+拆分节点可以避免“素材输出连接到前置提示词重写器，再返回同一编码节点”产生的循环：
 
 ```text
-独立图片：      <Picture 1>
-自动边界帧：    <Picture 2>、<Picture 3>
-独立音频：      <Audio 1>、<Audio 2>
-视频配套原声：  <Audio 3>
-参考视频：      <Video 1>
+素材规划台 ──Omni素材包──> Omni提示词桥 ──rewritten_prompt──> 规划编码器
+     └────────────────素材规划──────────────────────────────> 规划编码器
 ```
 
-节点底部会实时显示当前编号映射。
+## 安装
 
-## 生成时长与帧数对齐
-
-MiniMax H3要求帧数满足 `5 + 17n`。节点会将 `generation_seconds × 24` 对齐到最接近的合法帧数。
-
-| 请求时长 | H3帧数 | 实际对应时长约为 |
-| --- | ---: | ---: |
-| 5秒 | 124 | 5.17秒 |
-| 10秒 | 243 | 10.13秒 |
-
-青色选区长度和 `generation_seconds` 双向同步，避免界面显示时长与实际执行时长不一致。
-
-## 分辨率与内存保护
-
-视频解码过程中，每一帧都会立即等比例缩放并居中裁剪到节点的 `width × height`。独立图片和自动边界帧使用相同策略。
-
-它同时保护：
-
-- 系统内存：不会把整段4K/8K选区以原始分辨率累计到内存；
-- 显存：视频VAE接收到的参考尺寸受到节点输出尺寸限制。
-
-磁盘上的源素材不会被修改。
-
-## 两个音频输出的行为
-
-### 视频原声合并
-
-- 遵循每段视频的时间线起点；
-- 遵循源视频入点和裁剪长度；
-- 视频之间的空隙保留静音；
-- 视频重叠时进行混音；
-- 统一输出44.1kHz；
-- 混音结果限制在 `[-1,1]` 范围。
-
-### 独立音频合并
-
-- 按独立音频素材箱从左到右的顺序；
-- 遵循各音频的源入点和长度；
-- 多段音频直接首尾拼接，不插入空隙；
-- 统一输出44.1kHz。
-
-## H3相关限制
-
-- 图片参考总数最多9张，自动边界帧也占用名额。
-- 参考视频最多3段。
-- 每个参考视频窗口最长15秒。
-- 独立参考音频最多3段。
-- 视频参考按24fps采样。
-- 提示词标签形式为 `<Picture i>`、`<Video k>`、`<Audio j>`。
-
-如果9个图片名额全部被独立图片占用，节点将无法继续加入自动边界帧。
-
-## 素材存储与缓存位置
-
-上传的素材保存在：
-
-```text
-ComfyUI/input/minimax_h3_timeline_director/
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
 ```
 
-低清预览代理缓存在：
+重启 ComfyUI 后，搜索 `MiniMax H3` 即可找到节点。
 
-```text
-ComfyUI/input/minimax_h3_timeline_director/preview_proxies/
-```
+插件以英文作为基础 UI，并通过 ComfyUI 官方本地化机制提供简体中文。它会跟随 ComfyUI
+设置中选择的界面语言；切换语言后请刷新前端或重启 ComfyUI。
 
-工作流JSON只保存文件引用和编辑数据，不会把媒体文件嵌入工作流。重新打开工作流时，需要确保对应输入文件仍然存在。
+### 环境要求
 
-## 常见问题
+- 较新的 ComfyUI，包含原生 MiniMax H3 节点；使用固定 Guide 时还需 `MiniMaxH3AddGuide`。
+- MiniMax H3 Ref2VA 对应模型、CLIP、视频 VAE 和音频 VAE。
+- Python 3.10 或更高版本。
+- 低清代理依赖 ComfyUI 环境中的 `imageio-ffmpeg`。
 
-### 搜索不到节点
+插件不额外声明 pip 依赖，使用兼容 ComfyUI 通常已经包含的 PyAV、Pillow、NumPy、PyTorch、torchaudio、aiohttp 和 imageio-ffmpeg。
 
-- 将ComfyUI更新到包含原生MiniMax H3节点的版本。
-- 确认插件文件夹直接位于 `ComfyUI/custom_nodes/`。
-- 重启ComfyUI并检查启动日志中的导入错误。
+## 示例工作流
 
-### 首次预览一直显示正在生成代理
+仓库只保留下面两个示例。第一个是日常生成入口，第二个用于需要 Omni 自动扩写提示词的场景。
 
-首次预览需要运行一次FFmpeg。视频较长或分辨率较高时需要等待片刻，之后会直接使用缓存。
+### 1. 全功能合一完全体导演台（推荐）
 
-### 低清预览生成失败
+[下载工作流](example_workflows/MiniMaxH3全功能合一完全体导演台工作流.json)
 
-- 检查ComfyUI Python环境是否包含 `imageio-ffmpeg`；
-- 检查源文件是否包含可读取的视频流；
-- 检查ComfyUI输入目录是否可写。
+这是一套 **全任务、轻量级、无需换图** 的主工作流，仅通过素材规划台的素材、时间框和提示词配置，即可完成：
 
-### 实际生成时长存在少量差异
+- 无素材单段文生视频。
+- 无素材多段文生长视频。
+- 图片参考单段生成。
+- 图片参考多段生成。
+- 图片 + 音频单段参考生成。
+- 图片 + 音频多段参考生成及数字人对口型。
+- 视频单段可编辑参考、人物替换和动作迁移。
+- 长视频手动分段参考生成、人物替换、动作迁移及最终音画合并。
 
-H3只能接受 `5 + 17n` 帧，节点会自动对齐到最近的合法帧数。
+素材规划台的 **分段规划** 直接连接 **MiniMax H3 有限分段采样**。未上传素材时会建立空 AV Latent；上传素材后则按每段分配关系编码参考。用户可以拖动 GEN 时间框定义各段长度与接缝重叠，使用全局提示词复用同一要求，也可以为每段填写独立提示词。插件负责合法帧数对齐、Drift-Control、Soft AV、重叠去除、尾部裁剪和最终合并。
 
-### 删除素材后编号发生变化
+> 插件不会按参考媒体时长自动分段，也不会替用户判断角色是否应当续接。分段范围、相邻段重叠和每段素材均由时间线配置决定；人物替换通常应把原视频设为 `可编辑参考`。
 
-这是正常行为。独立素材箱始终使用连续编号，修改素材后请查看节点底部最新映射。
+### 2. 时间规划 + Prompt 提示词生成
 
-### 工作流能打开但提示素材丢失
+[下载工作流](example_workflows/MiniMax_H3时间规划+Prompt提示词生成.json)
 
-工作流保存的是ComfyUI输入目录中的文件引用。请恢复对应文件或重新上传。
+在素材规划台基础上加入 **MiniMax H3 Omni 素材包提示词桥**，让 Prompt Rewriter Omni 同时读取有序图片、视频和音频，为当前任务扩写 H3 提示词。适合先由多模态模型理解素材，再进入 H3 生成的工作方式。
 
-## 测试
+> 使用该工作流前必须安装 [MiniMax-H3-Prompt-Rewriter-ComfyUI](https://github.com/pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI)。模型、量化方式及显存要求请参考该项目说明。
 
-`tests/smoke_media_pipeline.py` 会检查：
+## 基本使用方法
 
-- `2–7s` 局部视频提取；
-- 视频配套原声采样数；
-- 独立音频提取和多音频拼接；
-- 独立图片优先编号；
-- 自动首尾边界帧；
-- 视频空隙桥接和音频空隙静音；
-- 时间线视频原声合并长度；
-- H3合法帧数对齐；
-- 目标分辨率保护；
-- 低清代理分辨率、帧率和无音频状态。
+1. 设置 `width`、`height` 和 `generation_seconds`。
+2. 用 `+ 视频`、`+ 图片`、`+ 音频` 添加素材；也可以把文件直接拖入控件。
+3. 移动、裁剪或分段视频，并把青色选区放到本次需要生成的区间。
+4. 为每段视频选择用途：
+   - `固定Guide`：重叠部分按生成时间位置固定，适合续写和保持运动。
+   - `可编辑参考`：只作为 `<Video N>` 参考，不硬锁原人物，适合人物或风格替换。
+   - `仅固定边界`：仅固定重叠区首尾帧。
+5. 按需开启或关闭“视频原声”参考。
+6. 检查底部提示词编号，再连接对应编码或提示词工作流运行。
 
-使用ComfyUI自己的Python，在ComfyUI目录运行：
+视频编号按照青色选区内重叠片段在时间线上的从左到右顺序生成。独立图片和独立音频按素材箱显示顺序生成编号，拖拽排序后会同步更新底层输入顺序。
 
-```text
-python path/to/tests/smoke_media_pipeline.py VIDEO IMAGE AUDIO
-```
+## 长视频分段
 
-三个素材参数均为相对于 `ComfyUI/input/` 的路径。
+推荐分段生成并保留短重叠区：下一段使用上一段末尾镜头作为开头 Guide，提示词中的 `Shot 1` 必须先描述这段重叠参考，再描述新内容。合并时删除后一段重复的固定 Guide 区域。完整规则见 [Agent 操作规范](docs/AGENT_LONG_VIDEO_GUIDE_CN.md)。
 
-## 项目结构
+### 有限分段直接 Latent 续写
 
-```text
-ComfyUI-MiniMaxH3-TimelineDirector/
-├── __init__.py
-├── minimax_h3_timeline_director.py
-├── js/
-│   └── minimax_h3_timeline_director.js
-├── example_workflows/
-│   └── minimax_h3_r2v_时间线导演台.json
-├── tests/
-│   └── smoke_media_pipeline.py
-├── docs/
-│   ├── images/
-│   │   ├── creator-wecom.webp
-│   │   ├── partial-overlap.webp
-│   │   └── workflow-overview.webp
-│   └── MEDIA_CHECKLIST.md
-├── CHANGELOG.md
-├── README.md
-├── README_CN.md
-├── pyproject.toml
-└── .gitignore
-```
+有限分段采样会把上一段 sampled AV Latent 的尾部直接放到下一段开头，避开
+`RGB Decode → VAE Encode` 往返。有限分段采样固定使用 Drift-Control，不再提供续接模式
+选项。用户填写的重叠帧会向下对齐到 H3 合法时间网格，例如24变成22、48变成39；Latent
+续接、解码后裁剪和最终合并始终使用同一个实际重叠值。视频遮罩会同时适配实际重叠对应的
+Latent 时间步数量和外部采样器的真实 sigma 调度，可用于加速模型常用的4步、8步以及常规20步：仅对临时视频前缀按采样步动态匹配噪声，保持接缝侧 latent 干净；开启音频
+续接时，重叠音频前部保持完全保护，最后8个音频 latent tick 使用半余弦 Soft AV 遮罩逐渐
+释放到新生成声音。合并时由后一段的 Soft AV 重叠音频替换前一段末尾，因此渐变会保留在
+最终音轨中。所有分段始终使用采样节点设置的同一个种子。旧的
+`循环分段提示词`、`Latent 循环续段`、`循环片段去重`以及对 PR #15923 的依赖已经移除。
 
-## 致谢
+Drift-Control AV 基于 GPL-3.0 项目
+[ComfyUI-MiniMaxH3-Contex-Loop](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop)
+的实验实现进行适配，目前仅建议用于同镜头长链对照测试。
 
-- 本插件面向ComfyUI原生MiniMax H3 Reference-to-Video实现开发。
-- 时间线交互设计参考了WhatDreamsCost-ComfyUI中的LTX Director思路，并针对MiniMax H3参考素材语义、音频和输出方式重新实现。
+## 致谢与参考
 
-本项目与MiniMax及ComfyUI官方没有隶属关系。
+- 本项目的 Omni 提示词桥及提示词工作流参考并适配了 [pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI](https://github.com/pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI)。
+- MiniMax H3 提示词结构与模型使用方式请参考 [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)。
+- 感谢 ComfyUI 原生 MiniMax H3 与 Guide 节点的维护者。
 
-## 许可证
+## 许可
 
-本项目使用 [GNU General Public License v3.0](LICENSE) 开源许可证。
-
-`pyproject.toml` 中的 `PublisherId` 当前仍为 `local`。如果需要发布到Comfy Registry，必须替换成仓库所有者的Publisher ID。
+[GPL-3.0](LICENSE)
