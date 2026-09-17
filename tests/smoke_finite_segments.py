@@ -58,6 +58,83 @@ def _prompt(label: str):
 
 def main():
     finite = _load_package(Path(__file__).resolve().parents[1])
+
+    # In two-stage mode, enabling an embedded reference-video soundtrack turns
+    # it into the same zero-denoise/final-master path used by explicit locked
+    # audio. Disabling video audio leaves sound generation to H3.
+    video_plan = _plan()
+    video_plan["timeline"]["videoAudioEnabled"] = True
+    video_plan["timeline"]["videoClips"] = [{
+        "id": "v1", "file": "reference.mp4", "start": 0.0,
+        "trimStart": 1.25, "duration": 8.0, "hasAudio": True,
+    }]
+    video_finite = {
+        "type": "minimax_h3_finite_segment_plan", "version": 4,
+        "mode": "single_segment", "source_plan": video_plan,
+        "segment_count": 1, "segment_plans": [video_plan],
+        "prompts": [_prompt("Video")], "second_pass": True,
+        "overlap_frames": 0, "segment_overlaps": [0],
+        "segment_lengths": [192], "target_output_frames": 192,
+    }
+    automatic_video_lock = finite._finite_locked_audio_asset(video_finite)
+    assert automatic_video_lock["lockKind"] == "timeline_video_audio"
+    video_finite["second_pass"] = False
+    assert finite._finite_locked_audio_asset(video_finite)["lockKind"] == "timeline_video_audio"
+    one_pass_video_output = finite.MiniMaxH3FiniteSegmentSampler.execute(
+        model=object(), clip=object(), vae=object(), audio_vae=object(),
+        finite_plan=video_finite, sampler=object(),
+        sigmas=torch.linspace(1.0, 0.0, 5), seed=100,
+        continue_audio_latent=True, ref_image_size="match",
+    )
+    one_pass_video_types = [
+        node["class_type"] for node in one_pass_video_output.expand.values()
+    ]
+    assert "SamplerCustomAdvanced" in one_pass_video_types
+    assert "MiniMaxH3LockedAudioSlice" in one_pass_video_types
+    assert "MiniMaxH3LockAudioLatent" in one_pass_video_types
+    assert "MiniMaxH3LockedAudioMaster" in one_pass_video_types
+    assert "AudioConcat" not in one_pass_video_types
+    video_plan["timeline"]["videoAudioEnabled"] = False
+    assert finite._finite_locked_audio_asset(video_finite) is None
+    assert finite._finite_video_audio_muted(video_finite) is True
+    muted_output = finite.MiniMaxH3FiniteSegmentSampler.execute(
+        model=object(), clip=object(), vae=object(), audio_vae=object(),
+        finite_plan=video_finite, sampler=object(),
+        sigmas=torch.linspace(1.0, 0.0, 5), seed=100,
+        continue_audio_latent=True, ref_image_size="match",
+    )
+    muted_types = [node["class_type"] for node in muted_output.expand.values()]
+    assert "MiniMaxH3SilentAudioSlice" in muted_types
+    assert "MiniMaxH3LockAudioLatent" in muted_types
+    assert "MiniMaxH3SilentAudioMaster" in muted_types
+    assert "AudioConcat" not in muted_types
+    assert "final output is silent" in muted_output[3]
+
+    video_finite["second_pass"] = True
+    video_plan["timeline"]["videoAudioEnabled"] = True
+    assert finite._finite_video_audio_muted(video_finite) is False
+
+    original_selflift_settings = finite._selflift_settings
+    finite._selflift_settings = lambda *_args, **_kwargs: {
+        "transition_step": 2, "lowres_scale": 0.5, "rho": 0.0,
+        "w_min": 0.5, "w_max": 1.0, "upscaler_model": "test.safetensors",
+    }
+    try:
+        video_output = finite.MiniMaxH3FiniteSegmentSampler.execute(
+            model=object(), clip=object(), vae=object(), audio_vae=object(),
+            finite_plan=video_finite, sampler=object(),
+            sigmas=torch.linspace(1.0, 0.0, 5), seed=100,
+            continue_audio_latent=True, ref_image_size="match",
+        )
+    finally:
+        finite._selflift_settings = original_selflift_settings
+    video_types = [node["class_type"] for node in video_output.expand.values()]
+    assert "MiniMaxH3LockedAudioSlice" in video_types
+    assert "MiniMaxH3LockAudioLatent" in video_types
+    assert "MiniMaxH3LockedAudioMaster" in video_types
+    assert "AudioConcat" not in video_types
+    assert "exact edited timeline waveform" in video_output[3]
+
     planner_schema = finite.MiniMaxH3FiniteSegmentExpansion.define_schema()
     sampler_schema = finite.MiniMaxH3FiniteSegmentSampler.define_schema()
     planner_inputs = {item.id for item in planner_schema.inputs}
@@ -95,7 +172,7 @@ def main():
     assert len(by_type["MiniMaxH3FiniteLatentContinuation"]) == 3
     assert len(by_type["SamplerCustomAdvanced"]) == 3
     assert len(by_type["MiniMaxH3FiniteSegmentFinalize"]) == 3
-    assert len(by_type["ImageBatch"]) == 2
+    assert "ImageBatch" not in by_type
     assert len(by_type["AudioConcat"]) == 2
 
     encoders = sorted(by_type["MiniMaxH3TimelineEncoder"])
@@ -109,7 +186,10 @@ def main():
     assert "previous_latent" in continuations[1][1]
     assert all("gradient_temporal_mask" not in item[1] for item in continuations)
     assert all("continuation_mode" not in item[1] for item in continuations)
-    assert all(item[1]["trim_audio_head"] is False for item in by_type["MiniMaxH3FiniteSegmentFinalize"])
+    finalizers = sorted(by_type["MiniMaxH3FiniteSegmentFinalize"])
+    assert "accumulated_images" not in finalizers[0][1]
+    assert all("accumulated_images" in item[1] for item in finalizers[1:])
+    assert all(item[1]["trim_audio_head"] is False for item in finalizers)
     assert len(by_type["MiniMaxH3FiniteAudioTrimTail"]) == 2
     assert "Drift-Control AV 39-frame" in output[3]
     assert "Soft AV half-cosine release" in output[3]
@@ -178,6 +258,18 @@ def main():
         accumulated, overlap_frames=48,
     )[0]
     assert tail_trimmed["waveform"].shape[-1] == sample_rate * 4 - round(39 / 24 * sample_rate)
+
+    # The preceding segment owns the visual overlap: keep its complete tail
+    # and remove the matching opening frames from the incoming segment.
+    preceding = torch.ones((8, 1, 1, 1), dtype=torch.float32)
+    incoming = torch.full((8, 1, 1, 1), 2.0, dtype=torch.float32)
+    joined = finite.MiniMaxH3FiniteSegmentFinalize.execute(
+        {"samples": torch.zeros(1)}, incoming, iteration=1,
+        overlap_frames=5, accumulated_images=preceding,
+    )[1]
+    assert joined.shape[0] == 11
+    assert torch.all(joined[:8] == 1)
+    assert torch.all(joined[8:] == 2)
 
     images = torch.arange(1467, dtype=torch.float32).reshape(1467, 1, 1, 1)
     long_audio = {

@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-17
+
+### Added
+
+- Bundle the MiniMax H3 progressive-resolution runtime so two-stage segmented generation works without a separate `comfyui-SelfLift` installation.
+- Support locked-audio long-video digital humans through the native AV mask/sigma path while preserving low- and high-resolution continuation state between segments.
+- Add Material Planner controls for enabling two-stage sampling, selecting any checkpoint from `models/latent_upscale_models`, and choosing the number of high-resolution steps.
+
+### Changed
+
+- In both one-stage and two-stage reference-video generation, enabling Video Original Audio now promotes the edited soundtrack to the locked native AV path: every segment receives the exact timeline slice with a zero audio denoise mask, and final output uses the continuous original waveform. Disabling it fixes the AV audio stream and final master to silence instead of asking H3 to generate replacement sound; an explicitly uploaded locked audio asset still takes priority.
+- Reduce routine two-stage timing, memory, upscaler, and tiling messages to debug logging.
+- Give the retained side of a learned 3D latent lift real low-resolution predecessor context, eliminating the fixed dark/bright pulse at a trimmed segment boundary without restoring a high-resolution latent paste.
+- Preserve both native low-resolution tails and final high-resolution Drift-Control anchors across every segmented generation mode, including text, image, audio, image-plus-audio, reference video, and digital-human workflows.
+
+### Fixed
+
+- Eliminate progressive blur, white flashes, and visible joins at two-stage long-video boundaries by applying continuation consistently at both resolution stages.
+- Keep locked digital-human audio on the native AV mask/sigma path through both SelfLift stages and restore one continuous original waveform during final assembly.
+
 ## [0.7.0] - 2026-09-15
 
 ### Added

@@ -128,27 +128,29 @@ class _DriftControlMaskState:
         self.current_packed_mask: torch.Tensor | None = None
         self.current_video_mask: torch.Tensor | None = None
         self.current_audio_mask: torch.Tensor | None = None
+        self.selflift_base_mask: torch.Tensor | None = None
+        self.selflift_hard_lock = False
 
-    def denoise_mask_function(
-        self,
-        sigma: torch.Tensor,
-        denoise_mask: torch.Tensor,
-        extra_options: dict[str, Any] | None = None,
-    ) -> torch.Tensor:
-        current = float(torch.as_tensor(sigma).detach().float().reshape(-1)[0])
-        schedule = self.sigmas or _schedule_values(
-            (extra_options or {}).get("sigmas", ())
-        )
-        output, video_mask = apply_dynamic_prefix_mask(
-            denoise_mask,
-            self.video_shape,
-            matched_noise_ratio(current, schedule),
-            prefix_steps=self.prefix_steps,
-            taper_steps=min(DRIFT_CONTROL_TAPER_STEPS, self.prefix_steps),
-        )
-        # The sampler consumes the packed mask, while H3's diffusion model
-        # consumes separate video/audio masks. Preserve both views so a locked
-        # zero audio mask is not discarded by the dynamic video-prefix wrapper.
+    def _update_masks(self, sigma: torch.Tensor, packed_mask: torch.Tensor) -> torch.Tensor:
+        if self.selflift_hard_lock:
+            # SelfLift performs a second low-res -> lift -> high-res denoise
+            # pass.  Its copied overlap must remain a strict read-only context
+            # in both stages: 0 keeps the preceding segment latent, 1 generates
+            # new content.  Ordinary one-stage sampling retains the adaptive
+            # Drift-Control schedule below.
+            output = packed_mask.clone()
+            video_elements = math.prod(self.video_shape[1:])
+            video = output[..., :video_elements].reshape(self.video_shape)
+            video_mask = torch.ceil(video[:, :1].float() * 256.0) / 256.0
+        else:
+            current = float(torch.as_tensor(sigma).detach().float().reshape(-1)[0])
+            output, video_mask = apply_dynamic_prefix_mask(
+                packed_mask,
+                self.video_shape,
+                matched_noise_ratio(current, self.sigmas),
+                prefix_steps=self.prefix_steps,
+                taper_steps=min(DRIFT_CONTROL_TAPER_STEPS, self.prefix_steps),
+            )
         self.current_packed_mask = output
         self.current_video_mask = video_mask
         video_elements = math.prod(self.video_shape[1:])
@@ -158,7 +160,54 @@ class _DriftControlMaskState:
         self.current_audio_mask = audio.reshape(self.audio_shape)[:, :1].clone()
         return output
 
+    def configure_selflift_stage(
+        self,
+        video_shape: tuple[int, ...],
+        video_mask: torch.Tensor,
+        audio_mask: torch.Tensor,
+        hard_lock: bool = False,
+    ) -> None:
+        """Bind Drift-Control to SelfLift's active low- or full-resolution grid."""
+        shape = tuple(int(value) for value in video_shape)
+        if len(shape) != 5:
+            raise ValueError("SelfLift Drift-Control requires a 5D H3 video latent")
+        if audio_mask.ndim != len(self.audio_shape):
+            raise ValueError("SelfLift received an invalid H3 audio mask")
+        if audio_mask.shape[0] not in (1, self.audio_shape[0]):
+            raise ValueError("SelfLift changed the H3 audio latent batch")
+        if audio_mask.shape[1] not in (1, self.audio_shape[1]):
+            raise ValueError("SelfLift received an invalid H3 audio mask channel count")
+        if any(mask_size not in (1, stream_size) for mask_size, stream_size in zip(
+            audio_mask.shape[2:], self.audio_shape[2:]
+        )):
+            raise ValueError("SelfLift changed the H3 audio latent shape")
+        self.video_shape = shape
+        self.selflift_hard_lock = bool(hard_lock)
+        expanded_video = video_mask.expand(
+            shape[0], shape[1], shape[2], shape[3], shape[4]
+        ).reshape(shape[0], 1, -1)
+        expanded_audio = audio_mask.expand(self.audio_shape).reshape(shape[0], 1, -1)
+        self.selflift_base_mask = torch.cat((expanded_video, expanded_audio), dim=-1)
+        self.current_packed_mask = self.selflift_base_mask
+        self.current_video_mask = video_mask
+        self.current_audio_mask = audio_mask
+
+    def denoise_mask_function(
+        self,
+        sigma: torch.Tensor,
+        denoise_mask: torch.Tensor,
+        extra_options: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
+        if not self.sigmas:
+            self.sigmas = _schedule_values((extra_options or {}).get("sigmas", ()))
+        return self._update_masks(sigma, denoise_mask)
+
     def apply_model_wrapper(self, executor, *args, **kwargs):
+        if self.selflift_base_mask is not None:
+            sigma = args[1] if len(args) > 1 else kwargs.get("t")
+            if sigma is None:
+                raise ValueError("SelfLift Drift-Control model call has no sigma")
+            self._update_masks(sigma, self.selflift_base_mask)
         if self.current_video_mask is not None:
             kwargs["denoise_mask"] = self.current_video_mask
         if self.current_audio_mask is not None:

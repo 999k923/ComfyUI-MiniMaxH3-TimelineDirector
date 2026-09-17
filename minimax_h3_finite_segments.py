@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import torch
+import folder_paths
 from comfy.nested_tensor import NestedTensor
 from comfy_api.latest import io
 from comfy_execution.graph_utils import GraphBuilder
@@ -29,10 +30,51 @@ from .minimax_h3_timeline_director import (
     _audio_mode,
     _decode_audio,
     _safe_input_path,
+    _timeline_video_audio,
 )
 
 H3_FPS = 24
 FiniteSegmentPlan = io.Custom("MINIMAX_H3_FINITE_SEGMENT_PLAN")
+
+
+def _selflift_settings(
+    step_count: int, requested_model: str = "", requested_high_steps=None,
+) -> dict:
+    if step_count < 2:
+        raise ValueError("Two-stage sampling requires at least two sampling steps")
+    if requested_high_steps is None:
+        # Old saved workflows did not contain this field. Keep them usable while
+        # making four full-resolution steps the default for the common 8-step run.
+        high_steps = min(4, step_count - 1)
+    else:
+        try:
+            high_steps = int(requested_high_steps)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"High-resolution sampling steps must be an integer; got {requested_high_steps!r}"
+            ) from error
+        if high_steps < 1 or high_steps >= step_count:
+            raise ValueError(
+                "High-resolution sampling steps must be at least 1 and lower than "
+                f"the Basic Scheduler step count ({step_count}); got {high_steps}"
+            )
+    transition = step_count - high_steps
+    models = list(folder_paths.get_filename_list("latent_upscale_models"))
+    if not models:
+        raise ValueError(
+            "Two-stage sampling requires a latent upscaler under "
+            "ComfyUI/models/latent_upscale_models"
+        )
+    selected = str(requested_model or "").strip() or models[0]
+    if selected not in models:
+        raise ValueError(
+            f"The selected two-stage latent upscaler is unavailable: {selected}"
+        )
+    return {
+        "transition_step": transition, "lowres_scale": 0.5,
+        "rho": 0.0, "w_min": 0.5, "w_max": 1.0,
+        "upscaler_model": selected,
+    }
 
 
 @lru_cache(maxsize=8)
@@ -62,7 +104,46 @@ def _locked_audio_pcm(asset: dict) -> dict:
     return audio
 
 
-def _locked_audio_for_plan(plan) -> dict | None:
+def _video_soundtrack_lock_for_plan(plan) -> dict | None:
+    """Expose an enabled reference-video soundtrack as one timeline master.
+
+    Reference-video generation must preserve the uploaded video's edited
+    soundtrack in both one-stage and two-stage sampling, rather than merely
+    offering it to H3 as a paired audio reference.  The synthetic asset keeps
+    the existing locked-audio graph
+    usable while ``_locked_audio_interval`` sources samples from the edited
+    video timeline (including source trims, clip offsets, gaps, and mixes).
+    """
+
+    source = _require_timeline_plan(plan)
+    timeline = source["timeline"]
+    if timeline.get("videoAudioEnabled", True) is False:
+        return None
+    clips = [
+        clip for clip in timeline.get("videoClips", [])
+        if isinstance(clip, dict) and clip.get("file")
+        and clip.get("hasAudio", True) is not False
+        and float(clip.get("duration") or 0.0) > 0.0
+    ]
+    if not clips:
+        return None
+    identity = [
+        {
+            "file": str(clip["file"]),
+            "start": round(float(clip.get("start") or 0.0), 6),
+            "trimStart": round(float(clip.get("trimStart") or 0.0), 6),
+            "duration": round(float(clip.get("duration") or 0.0), 6),
+        }
+        for clip in sorted(clips, key=lambda item: float(item.get("start") or 0.0))
+    ]
+    return {
+        "lockKind": "timeline_video_audio",
+        "name": "Reference video original soundtrack",
+        "identity": identity,
+    }
+
+
+def _locked_audio_for_plan(plan, *, include_video_soundtrack: bool = True) -> dict | None:
     source = _require_timeline_plan(plan)
     assets = [
         asset for asset in source["timeline"].get("audios", [])
@@ -70,7 +151,13 @@ def _locked_audio_for_plan(plan) -> dict | None:
     ]
     if len(assets) > 1:
         raise ValueError("Each segment can contain at most one locked original-audio asset")
-    return assets[0] if assets else None
+    if assets:
+        # An explicitly uploaded locked soundtrack always has priority over a
+        # reference video's embedded audio.
+        return assets[0]
+    if include_video_soundtrack:
+        return _video_soundtrack_lock_for_plan(source)
+    return None
 
 
 def _finite_locked_audio_asset(finite: dict) -> dict | None:
@@ -80,7 +167,10 @@ def _finite_locked_audio_asset(finite: dict) -> dict | None:
         _finite_plan_for_segment(finite, number)
         for number in range(1, int(finite["segment_count"]) + 1)
     ]
-    assets = [_locked_audio_for_plan(plan) for plan in plans]
+    assets = [
+        _locked_audio_for_plan(plan, include_video_soundtrack=True)
+        for plan in plans
+    ]
     if not any(assets):
         return None
     if not all(assets):
@@ -88,7 +178,12 @@ def _finite_locked_audio_asset(finite: dict) -> dict | None:
             "Locked original audio is enabled in only some segments; assign the same locked audio to every segment"
         )
     identity = {
-        (str(asset.get("file")), round(float(asset.get("trimStart") or 0.0), 6))
+        json.dumps(asset.get("identity"), sort_keys=True, ensure_ascii=False)
+        if asset.get("lockKind") == "timeline_video_audio"
+        else json.dumps(
+            [str(asset.get("file")), round(float(asset.get("trimStart") or 0.0), 6)],
+            ensure_ascii=False,
+        )
         for asset in assets if asset is not None
     }
     if len(identity) != 1:
@@ -96,6 +191,37 @@ def _finite_locked_audio_asset(finite: dict) -> dict | None:
             "A continuous locked soundtrack must use the same audio file and source-in point in every segment"
         )
     return copy.deepcopy(assets[0])
+
+
+def _finite_video_audio_muted(finite: dict) -> bool:
+    """Return true when a reference-video workflow explicitly disables audio.
+
+    The video-audio switch is an output policy, not a request for H3 to invent
+    a replacement soundtrack.  Explicitly uploaded locked audio still wins.
+    """
+
+    plans = [
+        _finite_plan_for_segment(finite, number)
+        for number in range(1, int(finite["segment_count"]) + 1)
+    ]
+    if any(
+        _locked_audio_for_plan(plan, include_video_soundtrack=False) is not None
+        for plan in plans
+    ):
+        return False
+    has_reference_video = any(
+        any(
+            isinstance(clip, dict) and clip.get("file")
+            for clip in _require_timeline_plan(plan)["timeline"].get("videoClips", [])
+        )
+        for plan in plans
+    )
+    if not has_reference_video:
+        return False
+    return all(
+        _require_timeline_plan(plan)["timeline"].get("videoAudioEnabled", True) is False
+        for plan in plans
+    )
 
 
 def _locked_audio_interval(plan, *, output_frames: int | None = None) -> dict:
@@ -109,8 +235,13 @@ def _locked_audio_interval(plan, *, output_frames: int | None = None) -> dict:
     if frame_count < 1:
         raise ValueError("The locked-audio interval has no target frames")
     duration = frame_count / H3_FPS
-    source_start = max(0.0, float(asset.get("trimStart") or 0.0)) + timeline_start
-    audio = _locked_audio_pcm(asset)
+    if asset.get("lockKind") == "timeline_video_audio":
+        # The mixed waveform is already laid out in timeline coordinates.
+        source_start = timeline_start
+        audio = _timeline_video_audio(source["timeline"])
+    else:
+        source_start = max(0.0, float(asset.get("trimStart") or 0.0)) + timeline_start
+        audio = _locked_audio_pcm(asset)
     expected = round(duration * int(audio["sample_rate"]))
     source_sample = round(source_start * int(audio["sample_rate"]))
     waveform = audio["waveform"]
@@ -128,6 +259,19 @@ def _locked_audio_interval(plan, *, output_frames: int | None = None) -> dict:
     result = dict(audio)
     result["waveform"] = waveform[..., :expected].clone()
     return result
+
+
+def _silent_audio_interval(plan, *, output_frames: int | None = None) -> dict:
+    source = _require_timeline_plan(plan)
+    frame_count = int(output_frames or source.get("length") or 0)
+    if frame_count < 1:
+        raise ValueError("The silent-audio interval has no target frames")
+    sample_rate = 44100
+    sample_count = max(1, round((frame_count / H3_FPS) * sample_rate))
+    return {
+        "waveform": torch.zeros((1, 1, sample_count), dtype=torch.float32),
+        "sample_rate": sample_rate,
+    }
 
 
 def _parse_segment_prompts(value: str) -> list[str]:
@@ -265,6 +409,9 @@ def _prepare_timeline_segments(source):
             "prompts": [global_prompt], "overlap_frames": 0,
             "segment_overlaps": [0], "segment_lengths": [length],
             "target_output_frames": length,
+            "second_pass": bool(source["timeline"].get("secondPass")),
+            "second_pass_model": str(source["timeline"].get("secondPassModel") or ""),
+            "second_pass_high_steps": source["timeline"].get("secondPassHighSteps"),
         }
 
     if config.get("mode") != "timeline" or not 1 <= count <= 64:
@@ -317,6 +464,9 @@ def _prepare_timeline_segments(source):
         "segment_count": len(plans), "segment_plans": plans, "prompts": prompts,
         "overlap_frames": 0, "segment_overlaps": overlaps,
         "segment_lengths": lengths, "target_output_frames": previous_end,
+        "second_pass": bool(source["timeline"].get("secondPass")),
+        "second_pass_model": str(source["timeline"].get("secondPassModel") or ""),
+        "second_pass_high_steps": source["timeline"].get("secondPassHighSteps"),
     }
 
 
@@ -447,6 +597,14 @@ class MiniMaxH3FiniteLatentContinuation(io.ComfyNode):
             gradient=False,
             audio_soft_release=bool(continue_audio_latent),
         )
+        # SelfLift keeps its native pre-lift low-resolution prediction beside
+        # the final high-resolution result. Carry that low-grid state into the
+        # next segment so Drift-Control does not reconstruct it by shrinking
+        # the preceding final high-resolution latent again.
+        previous_low_carry = previous_latent.get("selflift_low_resolution_carry")
+        if previous_low_carry is not None:
+            masked_target = dict(masked_target)
+            masked_target["selflift_previous_low_resolution_carry"] = previous_low_carry
         patched_model = install_drift_control_av_model(
             model, masked_target, sigmas, prefix_steps=details["video_tokens"]
         )
@@ -470,6 +628,25 @@ class MiniMaxH3LockedAudioSlice(io.ComfyNode):
     @classmethod
     def execute(cls, plan):
         return io.NodeOutput(_locked_audio_interval(plan))
+
+
+class MiniMaxH3SilentAudioSlice(io.ComfyNode):
+    """Internal helper that fixes one reference-video segment to silence."""
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="MiniMaxH3SilentAudioSlice",
+            display_name="MiniMax H3 Silent Audio Slice (Internal)",
+            category="MiniMax H3/Internal",
+            is_dev_only=True,
+            inputs=[TimelinePlan.Input("plan", display_name="Material Plan")],
+            outputs=[io.Audio.Output(display_name="Silent Audio")],
+        )
+
+    @classmethod
+    def execute(cls, plan):
+        return io.NodeOutput(_silent_audio_interval(plan))
 
 
 class MiniMaxH3LockAudioLatent(io.ComfyNode):
@@ -558,8 +735,36 @@ class MiniMaxH3LockedAudioMaster(io.ComfyNode):
         if target_frames < 1:
             target_frames = int(first.get("length") or 0)
         master_plan = copy.deepcopy(first)
-        master_plan["timeline"]["audios"] = [asset]
+        if asset.get("lockKind") != "timeline_video_audio":
+            master_plan["timeline"]["audios"] = [asset]
         return io.NodeOutput(_locked_audio_interval(master_plan, output_frames=target_frames))
+
+
+class MiniMaxH3SilentAudioMaster(io.ComfyNode):
+    """Return a duration-exact silent master when video audio is disabled."""
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="MiniMaxH3SilentAudioMaster",
+            display_name="MiniMax H3 Silent Audio Master (Internal)",
+            category="MiniMax H3/Internal",
+            is_dev_only=True,
+            inputs=[FiniteSegmentPlan.Input("finite_plan", display_name="Finite Segment Plan")],
+            outputs=[io.Audio.Output(display_name="Silent Audio")],
+        )
+
+    @classmethod
+    def execute(cls, finite_plan):
+        finite = _require_finite_plan(finite_plan)
+        first = _finite_plan_for_segment(finite, 1)
+        target_frames = int(finite.get("target_output_frames") or 0)
+        if target_frames < 1:
+            target_frames = sum(int(value) for value in finite.get("segment_lengths", []))
+            target_frames -= sum(int(value) for value in finite.get("segment_overlaps", [])[1:])
+        if target_frames < 1:
+            target_frames = int(first.get("length") or 0)
+        return io.NodeOutput(_silent_audio_interval(first, output_frames=target_frames))
 
 
 class MiniMaxH3FiniteSegmentFinalize(io.ComfyNode):
@@ -579,6 +784,7 @@ class MiniMaxH3FiniteSegmentFinalize(io.ComfyNode):
                 io.Int.Input("overlap_frames", default=22, min=0, max=3592),
                 io.Boolean.Input("trim_audio_head", default=True),
                 io.Audio.Input("audio", optional=True),
+                io.Image.Input("accumulated_images", optional=True),
             ],
             outputs=[
                 io.Latent.Output(display_name="Complete Latent"),
@@ -590,12 +796,17 @@ class MiniMaxH3FiniteSegmentFinalize(io.ComfyNode):
     @classmethod
     def execute(
         cls, sampled_latent, images, iteration, overlap_frames,
-        trim_audio_head=True, audio=None,
+        trim_audio_head=True, audio=None, accumulated_images=None,
     ):
         trim_frames = 0 if int(iteration) <= 0 or int(overlap_frames) == 0 else _valid_guide_frames(int(overlap_frames))
         if images.shape[0] <= trim_frames:
             raise ValueError(f"This segment has only {images.shape[0]} frames; cannot remove a {trim_frames}-frame overlap")
         trimmed_images = images[trim_frames:].clone() if trim_frames else images
+        if accumulated_images is not None:
+            # The preceding segment owns the visual overlap. Preserve its
+            # decoded tail and discard the duplicate opening interval from the
+            # incoming segment before joining the two timelines.
+            trimmed_images = torch.cat((accumulated_images, trimmed_images), dim=0)
         trimmed_audio = audio
         if audio is not None and bool(trim_audio_head):
             waveform = audio.get("waveform")
@@ -732,12 +943,23 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
         last_sampled = None
         overlap = int(finite["overlap_frames"])
         locked_audio = _finite_locked_audio_asset(finite)
-        soft_audio = bool(continue_audio_latent) and locked_audio is None
+        muted_video_audio = _finite_video_audio_muted(finite)
+        fixed_audio = locked_audio is not None or muted_video_audio
+        soft_audio = bool(continue_audio_latent) and not fixed_audio
         steps = drift_control_step_count(sigmas)
         if steps < 1:
             raise ValueError(
                 "Drift-Control AV requires a sigma schedule with at least one sampling step"
             )
+        second_pass = bool(finite.get("second_pass"))
+        selflift_settings = (
+            _selflift_settings(
+                steps,
+                finite.get("second_pass_model", ""),
+                finite.get("second_pass_high_steps"),
+            )
+            if second_pass else None
+        )
 
         for index, prompt in enumerate(finite["prompts"]):
             number = index + 1
@@ -752,7 +974,7 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
             continuation_inputs = {
                 "positive": encoder.out(0), "target_latent": encoder.out(1),
                 "iteration": index, "overlap_frames": overlap,
-                "continue_audio_latent": bool(continue_audio_latent) and locked_audio is None,
+                "continue_audio_latent": bool(continue_audio_latent) and not fixed_audio,
                 "model": model, "sigmas": sigmas,
             }
             if previous_latent is not None and overlap > 0:
@@ -764,49 +986,59 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
                 **continuation_inputs,
             )
             sampling_latent = continuation.out(1)
-            if locked_audio is not None:
+            if fixed_audio:
                 source_audio = graph.node(
-                    "MiniMaxH3LockedAudioSlice", id=f"locked_audio_slice_{number}",
+                    "MiniMaxH3LockedAudioSlice" if locked_audio is not None else "MiniMaxH3SilentAudioSlice",
+                    id=(f"locked_audio_slice_{number}" if locked_audio is not None else f"silent_audio_slice_{number}"),
                     plan=segment_plan,
                 )
                 encoded_audio = graph.node(
-                    "VAEEncodeAudio", id=f"locked_audio_encode_{number}",
+                    "VAEEncodeAudio", id=f"fixed_audio_encode_{number}",
                     audio=source_audio.out(0), vae=audio_vae,
                 )
                 sampling_latent = graph.node(
-                    "MiniMaxH3LockAudioLatent", id=f"locked_audio_latent_{number}",
+                    "MiniMaxH3LockAudioLatent", id=f"fixed_audio_latent_{number}",
                     target_latent=sampling_latent, audio_latent=encoded_audio.out(0),
                 ).out(0)
-            noise = graph.node("RandomNoise", id=f"noise_{number}", noise_seed=int(seed))
-            guider = graph.node(
-                "BasicGuider", id=f"guider_{number}", model=continuation.out(3),
-                conditioning=continuation.out(0),
-            )
-            sampled = graph.node(
-                "SamplerCustomAdvanced", id=f"sample_{number}", noise=noise.out(0),
-                guider=guider.out(0), sampler=sampler, sigmas=sigmas,
-                latent_image=sampling_latent,
-            )
+            if second_pass:
+                sampled = graph.node(
+                    "MiniMaxH3TimelineSelfLiftSampler", id=f"sample_{number}",
+                    model=continuation.out(3), positive=continuation.out(0),
+                    negative=continuation.out(0), vae=vae,
+                    latent_image=sampling_latent, sampler=sampler, sigmas=sigmas,
+                    seed=int(seed), cfg=1.0, **selflift_settings,
+                )
+            else:
+                noise = graph.node("RandomNoise", id=f"noise_{number}", noise_seed=int(seed))
+                guider = graph.node(
+                    "BasicGuider", id=f"guider_{number}", model=continuation.out(3),
+                    conditioning=continuation.out(0),
+                )
+                sampled = graph.node(
+                    "SamplerCustomAdvanced", id=f"sample_{number}", noise=noise.out(0),
+                    guider=guider.out(0), sampler=sampler, sigmas=sigmas,
+                    latent_image=sampling_latent,
+                )
             images = graph.node(
                 "VAEDecode", id=f"decode_video_{number}", samples=sampled.out(0), vae=vae,
             )
             audio = graph.node(
                 "VAEDecodeAudio", id=f"decode_audio_{number}", samples=sampled.out(0), vae=audio_vae,
             )
+            finalize_inputs = {}
+            if merged_images is not None:
+                finalize_inputs["accumulated_images"] = merged_images
             finalized = graph.node(
                 "MiniMaxH3FiniteSegmentFinalize", id=f"finalize_{number}",
                 sampled_latent=sampled.out(0), images=images.out(0), audio=audio.out(0),
                 iteration=index, overlap_frames=overlap,
                 trim_audio_head=not soft_audio,
+                **finalize_inputs,
             )
             current_images, current_audio = finalized.out(1), finalized.out(2)
             if merged_images is None:
                 merged_images, merged_audio = current_images, current_audio
             else:
-                image_join = graph.node(
-                    "ImageBatch", id=f"join_images_{number}",
-                    image1=merged_images, image2=current_images,
-                )
                 previous_audio_for_join = merged_audio
                 if soft_audio and overlap > 0:
                     previous_audio_for_join = graph.node(
@@ -817,7 +1049,7 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
                     "AudioConcat", id=f"join_audio_{number}",
                     audio1=previous_audio_for_join, audio2=current_audio, direction="after",
                 )
-                merged_images, merged_audio = image_join.out(0), audio_join.out(0)
+                merged_images, merged_audio = current_images, audio_join.out(0)
             previous_latent = sampled.out(0)
             previous_images = images.out(0)
             last_sampled = sampled.out(0)
@@ -836,10 +1068,23 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
                 "MiniMaxH3LockedAudioMaster", id="locked_audio_master",
                 finite_plan=finite,
             ).out(0)
+        elif muted_video_audio:
+            merged_audio = graph.node(
+                "MiniMaxH3SilentAudioMaster", id="silent_audio_master",
+                finite_plan=finite,
+            ).out(0)
 
+        locked_video_soundtrack = bool(
+            locked_audio is not None
+            and locked_audio.get("lockKind") == "timeline_video_audio"
+        )
         mode_status = (
+            "the reference-video soundtrack is encoded into every segment with a zero audio denoise mask, and the final output uses its exact edited timeline waveform"
+            if locked_video_soundtrack else
             "the source soundtrack is encoded into every segment with a zero audio denoise mask, and the final output uses the original continuous waveform"
             if locked_audio is not None else
+            "reference-video audio is disabled, so every segment uses a zero-denoise silent audio latent and the final output is silent"
+            if muted_video_audio else
             f"Drift-Control AV {overlap}-frame mask adapted to {steps} sampling steps; overlap audio uses an 8-tick Soft AV half-cosine release"
             if continue_audio_latent
             else f"Drift-Control AV {overlap}-frame mask adapted to {steps} sampling steps; audio is independently generated"
@@ -847,7 +1092,7 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
         status = (
             f"Expanded and sampled {finite['segment_count']} segments; actual overlap {overlap} frames; "
             f"all segments use seed {int(seed)}; {mode_status}; "
-            f"audio latent {'is locked to the source' if locked_audio is not None else ('continues' if continue_audio_latent else 'does not continue')}."
+            f"audio latent {'is locked to the source' if locked_audio is not None else ('is fixed to silence' if muted_video_audio else ('continues' if continue_audio_latent else 'does not continue'))}."
         )
         if finite.get("mode") == "timeline_segments":
             status = (
@@ -857,9 +1102,26 @@ class MiniMaxH3FiniteSegmentSampler(io.ComfyNode):
             )
             if locked_audio is not None:
                 status += (
-                    " The source soundtrack is encoded into every segment with a zero audio "
-                    "denoise mask; final audio is the original continuous waveform."
+                    " The reference-video soundtrack" if locked_video_soundtrack
+                    else " The uploaded locked soundtrack"
                 )
+                status += (
+                    " is encoded into every segment with a zero audio denoise mask; "
+                    "final audio is the original continuous waveform."
+                )
+            elif muted_video_audio:
+                status += (
+                    " Video source audio is disabled, so every segment uses a "
+                    "zero-denoise silent audio latent and final output is silent."
+                )
+        if second_pass:
+            status += (
+                f" Two-stage sampling ran on every segment: {selflift_settings['transition_step']} "
+                f"low-resolution step(s), {steps - selflift_settings['transition_step']} "
+                "full-resolution step(s); segment 2+ reuses both the preceding native "
+                "low-resolution tail for the low stage and the preceding final "
+                "high-resolution tail as the masked high-stage opening anchor."
+            )
         if target_output_frames > 0:
             trim_tail_frames = int(finite.get("trim_tail_frames") or 0)
             status += (

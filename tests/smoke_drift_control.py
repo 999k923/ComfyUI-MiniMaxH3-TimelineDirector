@@ -102,13 +102,12 @@ def main():
     )
     assert patched.mask_function is not None
     state = patched.model_options["minimax_h3_timeline_drift_control_av"]
-    # Runtime packed masks contain the complete audio stream; keep the earlier
-    # arbitrary-tail test separate from this model-wrapper integration check.
-    live_packed = torch.ones(
-        (1, 1, video_elements + 1 * 2 * 2 * 8), dtype=torch.float32
+    state_packed = torch.ones(
+        (1, 1, video_elements + latent["samples"][1].numel()),
+        dtype=torch.float32,
     )
     live = patched.mask_function(
-        torch.tensor([0.8]), live_packed, {"sigmas": schedule}
+        torch.tensor([0.8]), state_packed, {"sigmas": schedule}
     )
     live_video = live[..., :video_elements].reshape(video_shape)
     assert abs(live_video[0, 0, 0, 0, 0].item() - 0.625) < 1e-6
@@ -120,6 +119,25 @@ def main():
 
     assert state.apply_model_wrapper(executor, input="x") == "ok"
     assert torch.equal(captured["denoise_mask"], state.current_video_mask)
+
+    # SelfLift changes only the video spatial grid. Drift-Control must rebuild
+    # its packed mask for that stage while preserving the audio mask exactly.
+    low_video_mask = torch.ones((1, 1, 15, 1, 1), dtype=torch.float32)
+    locked_audio_mask = torch.zeros((1, 1, 1, 8), dtype=torch.float32)
+    state.configure_selflift_stage(
+        (1, 2, 15, 1, 1), low_video_mask, locked_audio_mask,
+    )
+    assert state.apply_model_wrapper(
+        executor, torch.zeros((1, 1, 1)), torch.tensor([0.8])
+    ) == "ok"
+    assert state.current_video_mask.shape == (1, 1, 15, 1, 1)
+    # SelfLift must retain the ordinary sigma-driven Drift-Control release for
+    # video instead of turning the whole continuation prefix into a hard lock.
+    assert abs(state.current_video_mask[0, 0, 0, 0, 0].item() - 0.625) < 1e-6
+    assert torch.unique(state.current_video_mask[0, 0, :7, 0, 0]).numel() > 1
+    # Audio has an independent mask: locked source audio remains untouched
+    # even while the video prefix is dynamically released.
+    assert torch.count_nonzero(state.current_audio_mask) == 0
     print("drift control AV smoke test: PASS")
 
 

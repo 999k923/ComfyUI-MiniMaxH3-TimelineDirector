@@ -101,4 +101,48 @@ with patch.object(finite,'_apply_h3_guides',return_value='anchored') as guide:
     out=finite.MiniMaxH3FiniteLatentContinuation.execute('positive',{},2,0,True,'model',None,{},previous,'vae','audio_vae')
     assert out[0]=='positive' and out[2]==0 and out[3]=='model'
     guide.assert_not_called()
+
+# A two-stage result carries its native low-resolution prediction as metadata.
+# The continuation node must forward it into the next target latent without
+# changing the existing high-resolution AV-tail and Drift-Control setup.
+low_carry=torch.randn(1,24,9,4,6)
+fake_previous={'samples':'high','selflift_low_resolution_carry':low_carry}
+fake_masked={'samples':'masked','noise_mask':'mask'}
+with patch.object(
+    finite,'_apply_linear_temporal_noise_mask',
+    return_value=(fake_masked,{'frames':22,'video_tokens':7}),
+), patch.object(finite,'install_drift_control_av_model',return_value='patched'):
+    carried=finite.MiniMaxH3FiniteLatentContinuation.execute(
+        'positive',{'samples':'target'},1,22,True,'model','sigmas',fake_previous,
+    )
+assert carried[1]['selflift_previous_low_resolution_carry'] is low_carry
+assert carried[1]['samples']=='masked' and carried[3]=='patched'
+
+# The planner switch replaces every internal segment sampler with SelfLift;
+# users do not add a second sampler node to the workflow manually.
+second_pass=copy.deepcopy(source)
+second_pass['timeline']['secondPass']=True
+second_pass['timeline']['secondPassModel']='minimax_h3_latent_upscaler_3d_bf16.safetensors'
+second_pass['timeline']['secondPassHighSteps']=5
+with patch.object(
+    finite.folder_paths, 'get_filename_list',
+    return_value=['minimax_h3_latent_upscaler_3d_bf16.safetensors'],
+):
+    second_pass_result=finite.MiniMaxH3FiniteSegmentSampler.execute(
+        model='model',clip='clip',vae='vae',audio_vae='audio_vae',finite_plan=second_pass,
+        sampler='sampler',sigmas=torch.tensor([1.,.85,.7,.55,.4,.25,.15,.08,0.]),
+        seed=7,continue_audio_latent=True,
+    )
+second_pass_nodes=list(second_pass_result.expand.values())
+selflift=[n for n in second_pass_nodes if n['class_type']=='MiniMaxH3TimelineSelfLiftSampler']
+assert len(selflift)==3
+assert all(n['inputs']['transition_step']==3 for n in selflift)
+assert all(n['inputs']['upscaler_model']=='minimax_h3_latent_upscaler_3d_bf16.safetensors' for n in selflift)
+assert not [n for n in second_pass_nodes if n['class_type']=='SamplerCustomAdvanced']
+assert 'Two-stage sampling ran on every segment' in second_pass_result[3]
+assert '3 low-resolution step(s), 5 full-resolution step(s)' in second_pass_result[3]
+for invalid_high_steps in (0, 8, 9):
+    try:finite._selflift_settings(8,'minimax_h3_latent_upscaler_3d_bf16.safetensors',invalid_high_steps)
+    except ValueError as error:assert 'lower than the Basic Scheduler step count' in str(error) or invalid_high_steps==0
+    else:raise AssertionError(f'Invalid high-resolution step count accepted: {invalid_high_steps}')
 print('timeline segment planning and execution graph: PASS')

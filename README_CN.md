@@ -21,6 +21,27 @@
 
 [![轻量级无限时长工作流](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/infinite-workflow.webp)](example_workflows/MiniMaxH3全功能合一完全体导演台工作流.json)
 
+## SelfLift 二采：75% 低清 + 25% 高清高速生成
+
+素材规划台已经集成适用于 MiniMax H3 的 SelfLift 渐进分辨率二采。勾选 **开启二采**，选择
+`ComfyUI/models/latent_upscale_models/` 中的 H3 Latent Upscaler，再填写 **高清采样步数**即可。
+推荐让高清阶段约占总采样步数的 `25%`：例如总步数为 8 时设置高清采样步数为 2，实际执行
+`6 步低分辨率 + Latent 放大 + 2 步高分辨率`。高清采样步数必须大于 0 且小于调度器总步数。
+
+![素材规划台二采开关、模型和高清采样步数](docs/images/two-stage-controls.png)
+
+二采不是简单地对每段单独放大：段与段之间会同时延续上一段的原生低清 Latent 尾部和最终
+高清 Latent 上下文，并在低清、高解析度两个阶段分别执行 Drift-Control。这样可以避免长视频
+逐段缩放、反复编解码造成的清晰度劣化，并消除多段生成常见的模糊、闪白和可见接缝。
+
+作者实测案例：`1536×832 / 29 秒`视频约 `10 分钟`直出，使用 `75%` 低清采样与 `25%`
+高清采样；实际速度会随显卡、显存、模型、步数和参考素材复杂度变化。锁定独立音频或开启
+参考视频原声后，音频进入原生 AV 零去噪锁定路径并以连续原波形作为最终主轨，实测内容与
+时序保持 `99%+` 一致；最终 MP4 封装仍可能按保存节点设置重新编码音频。
+
+同一套工作流可以完成文生视频、参考图生视频、参考音频生视频、图片加音频、参考视频编辑、
+人物替换、动作迁移、数字人对口型以及无明显劣化、无可见接缝的多段长视频生成。
+
 ### 约一分钟直接生成案例
 
 下面两段均为插件一次执行直接生成的 `52.625 秒 / 1263 帧 / 24fps` 成片。点击缩略图播放或下载原始 MP4；
@@ -51,7 +72,7 @@
 - 青色生成选区：只有与选区重叠的素材区间参与本次视频参考或 Guide。
 - 三种视频用途：`固定Guide`、`可编辑参考`、`仅固定边界`。
 - 纯文生视频：不上传任何素材且不启用分段时，素材规划台的全局提示词与当前 GEN 时长会由有限分段采样内部创建标准 H3 空 AV latent；启用手动时间框后也可生成文生长视频。
-- 原声同步：视频移动和裁剪时原声保持绑定，也可关闭视频原声参考。
+- 原声同步：视频移动和裁剪时原声保持绑定；无论一采还是二采，“视频原声”开启都会自动进入原声锁定的原生 AV 路径，并在最终输出中使用连续原波形；关闭后固定为静音，不生成替代声音。显式上传的锁定音频优先级更高。
 - 低清预览：最高 `480×270 / 12fps` 无声代理，红色播放头可拖动预览。
 - 独立素材箱：图片和音频支持多选、外部拖入、删除及拖拽排序；全局图片库与音频库不限制上传总数，
   每个实际生成分段仍遵循 MiniMax H3 的上限，最多使用 9 张参考图和 3 段参考音频。
@@ -59,6 +80,8 @@
 - 稳定编号：界面中的 `<Picture 1>`、`<Video 1>`、`<Audio 1>` 与 H3 输入顺序一致。
 - 全局与分段提示词：全局提示词可复用于全部片段；任意分段提示词启用后，全局提示词自动失效且要求补全每一段。
 - 显存保护：素材在解码时按节点 `width × height` 调整分辨率。
+- 内置二采：每个分段可先低清采样、再通过 H3 Latent Upscaler 放大并完成高清采样；长视频会同时延续上一段原生低清尾部和高清 Drift-Control 上下文，无需安装 `comfyui-SelfLift`。
+- 长视频数字人：锁定原声走原生 AV mask/sigma 路径，在分段和二采模式下保持音频内容及口型引导。
 - 音频输出：可分别输出时间线视频原声合并结果和独立参考音频合并结果。
 - 状态保存：时间线编辑状态会写入 ComfyUI 工作流 JSON。
 
@@ -89,6 +112,8 @@ git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
 ```
 
 重启 ComfyUI 后，搜索 `MiniMax H3` 即可找到节点。
+
+二采运行模块已经内置在本插件中，不需要另外安装 `comfyui-SelfLift`。开启二采仍需自行把兼容的 MiniMax H3 Latent Upscaler 模型放入 `ComfyUI/models/latent_upscale_models/`，素材规划台会自动列出该目录中的模型。
 
 插件以英文作为基础 UI，并通过 ComfyUI 官方本地化机制提供简体中文。它会跟随 ComfyUI
 设置中选择的界面语言；切换语言后请刷新前端或重启 ComfyUI。
@@ -142,7 +167,7 @@ git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
    - `固定Guide`：重叠部分按生成时间位置固定，适合续写和保持运动。
    - `可编辑参考`：只作为 `<Video N>` 参考，不硬锁原人物，适合人物或风格替换。
    - `仅固定边界`：仅固定重叠区首尾帧。
-5. 按需开启或关闭“视频原声”参考。
+5. 按需设置“视频原声”：开启即在一采和二采中锁定原音，关闭即静音输出。
 6. 检查底部提示词编号，再连接对应编码或提示词工作流运行。
 
 视频编号按照青色选区内重叠片段在时间线上的从左到右顺序生成。独立图片和独立音频按素材箱显示顺序生成编号，拖拽排序后会同步更新底层输入顺序。
@@ -169,6 +194,8 @@ Drift-Control AV 基于 GPL-3.0 项目
 
 ## 致谢与参考
 
+- 特别感谢 [facok/comfyui-SelfLift](https://github.com/facok/comfyui-SelfLift) 提供的 SelfLift 渐进分辨率二采技术。本插件在其思路和实现基础上针对 MiniMax H3 AV Latent、原生音频 mask/sigma、低清/高清长视频续接及接缝处理进行了深度适配，并将运行模块内置到插件中。
+- MiniMax H3 学习型 Latent Upscaler 的结构兼容参考了 [LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)。
 - 本项目的 Omni 提示词桥及提示词工作流参考并适配了 [pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI](https://github.com/pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI)。
 - MiniMax H3 提示词结构与模型使用方式请参考 [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)。
 - 感谢 ComfyUI 原生 MiniMax H3 与 Guide 节点的维护者。

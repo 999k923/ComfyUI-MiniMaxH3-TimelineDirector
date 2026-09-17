@@ -24,6 +24,33 @@ motion remains audio-driven while the final soundtrack preserves the uploaded re
 
 [![Lightweight unlimited-length workflow](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/releases/download/v0.6.0/infinite-workflow.webp)](example_workflows/MiniMaxH3全功能合一完全体导演台工作流.json)
 
+## SelfLift two-stage sampling: fast 75% low-res + 25% high-res generation
+
+The Material Planner now integrates a MiniMax H3 adaptation of SelfLift progressive-resolution
+sampling. Enable **Two-stage sampling**, select an H3 Latent Upscaler from
+`ComfyUI/models/latent_upscale_models/`, and set **High-resolution sampling steps**. A recommended
+starting point is `25%` of the scheduler's total steps: for an 8-step schedule, set 2 high-resolution
+steps to run `6 low-resolution steps + latent lift + 2 high-resolution steps`. The high-resolution
+value must be greater than zero and lower than the scheduler's total step count.
+
+![Two-stage toggle, model selector, and high-resolution step control](docs/images/two-stage-controls.png)
+
+This is not a per-segment upscale shortcut. Every later segment carries both the preceding native
+low-resolution latent tail and the final high-resolution context, with Drift-Control applied at both
+resolution stages. The resulting long-video path avoids progressive quality loss from repeated
+resizing or VAE round trips and removes the blur, white flashes, and visible seams normally associated
+with multi-segment generation.
+
+Creator benchmark: a `1536×832`, `29-second` video rendered directly in approximately `10 minutes`
+with a `75%` low-resolution / `25%` high-resolution schedule. Actual speed depends on GPU, VRAM,
+model, step count, and reference complexity. When standalone audio is locked or reference-video source
+audio is enabled, the native zero-denoise AV path restores one continuous source waveform; creator
+tests retain `99%+` content and timing consistency. The final MP4 saver may still re-encode audio.
+
+One workflow covers text-to-video, image-to-video, audio-reference generation, image plus audio,
+reference-video editing, character replacement, motion transfer, digital-human lip sync, and
+multi-segment long videos without visible seams or progressive degradation.
+
 ### Two directly generated, approximately one-minute examples
 
 Both videos were produced in one plugin execution and are `52.625 seconds / 1263 frames / 24fps`.
@@ -65,6 +92,9 @@ An editable reference-media timeline for ComfyUI's native **MiniMax H3 Reference
 - Stable `<Picture N>`, `<Video N>`, and `<Audio N>` ordering from UI to H3 inputs.
 - Global and per-segment prompts: the global prompt is reused only when all segment prompts are empty; entering any segment prompt requires completing every segment and disables the global prompt.
 - Decode-time resizing to the node's `width × height` for VRAM protection.
+- Built-in two-stage sampling for every segment, including native low-resolution tail carry, learned H3 latent lifting, and high-resolution Drift-Control continuation; `comfyui-SelfLift` is not required.
+- In both one-stage and two-stage reference-video generation, enabled Video Original Audio is automatically locked through the native AV path and restored as one continuous original waveform. Disabling it fixes the AV audio stream and final master to silence; an explicitly uploaded locked audio asset takes priority.
+- Segmented digital-human generation with locked source audio on the native AV mask/sigma path, preserving the soundtrack and lip-sync guidance through two-stage sampling.
 - Separate merged outputs for timeline soundtracks and standalone reference audio.
 - Timeline state is serialized into the ComfyUI workflow JSON.
 
@@ -94,6 +124,8 @@ git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
 ```
 
 Restart ComfyUI and search for `MiniMax H3`.
+
+The two-stage runtime is bundled with this plugin; do not install `comfyui-SelfLift` separately. Two-stage sampling still requires a compatible MiniMax H3 latent-upscaler checkpoint under `ComfyUI/models/latent_upscale_models/`; the Material Planner lists models from that standard directory automatically.
 
 The source UI is English. Simplified Chinese is provided through ComfyUI's official localization
 system and follows the language selected in ComfyUI settings; restart or reload the frontend after
@@ -177,6 +209,8 @@ under GPL-3.0. It remains experimental and is intended for same-shot long-chain 
 
 ## Credits
 
+- Special thanks to [facok/comfyui-SelfLift](https://github.com/facok/comfyui-SelfLift) for the SelfLift progressive-resolution sampling technology. This plugin deeply adapts that work for MiniMax H3 AV latents, native audio mask/sigma locking, low- and high-resolution long-video continuation, and seam handling, and bundles the required runtime.
+- MiniMax H3 learned latent-upscaler compatibility references [LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler).
 - The Omni bridge and prompt-generation workflow reference and adapt [pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI](https://github.com/pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI).
 - See [MiniMax-AI/MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3) for the official model and prompt guidance.
 - Thanks to the maintainers of ComfyUI's native MiniMax H3 and Guide nodes.
