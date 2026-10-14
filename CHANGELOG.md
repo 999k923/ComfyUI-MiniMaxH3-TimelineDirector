@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- Add a low-memory finite segment VIDEO sampler that encodes each decoded segment to ComfyUI's temporary directory and joins encoded sources without retaining the full RGB timeline. It saves no latent checkpoints and cleans temporary spill files.
+- Add a matching all-in-one low-memory example workflow that connects the sampler's `VIDEO` output directly to `SaveVideo`.
 - Add local configuration-only and complete-media preset folders, a preset browser/loader node, an export node accepting either Material Plan or Segment Plan, and an editable preset-import input on Material Planner.
 - Persist an executed preset back into the Material Planner UI so imported materials, segment timing, prompts, and assignments remain editable after disconnecting the loader.
 - Add a native ComfyUI `Start Loop` / `End Loop` workflow path with public nodes for loop-state initialization, per-iteration segment selection, continuation preparation, overlap-aware accumulation, and final output resolution.
@@ -20,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
+- Keep uploaded image/audio removal controls above thumbnails and drag surfaces so their delete buttons remain clickable.
 - Reset the active segment before applying imported preset widget values, allowing repeated imports when the next preset has fewer segments than the previous one.
 - Prefer and auto-repair selection to a structurally compatible MiniMax H3 latent upscaler when the shared model directory also contains LTX upscalers; reject incompatible checkpoints before low-resolution sampling and report the selected filename clearly.
 - [spill-seg-offload] Evict per-segment decoded frames and the superseded accumulated tensor after merge in FiniteSegmentFinalize; sampled latent, merged output and audio untouched. Prevents RAM OOM on long multi-segment sampler jobs. Set H3_MERGED_FP16=1 to store merged frames in float16 (halves retained bytes; blind-tested, no perceivable difference).

@@ -72,6 +72,14 @@ it adds nothing to the plugin clone or installation size.
   <a href="https://www.youtube.com/@shixiongsong">YouTube</a>
 </p>
 
+## Feature timeline
+
+- **2026-08** — Introduced the editable media timeline, reference orchestration, per-segment prompts, and the first finite long-video path.
+- **2026-09** — Added the all-in-one workflow, locked-original-audio avatars, bundled SelfLift two-stage sampling, low/high-resolution continuation, local presets, and native ComfyUI Loop nodes.
+- **2026-09-15** — Merged community [PR #9](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/pull/9), fixing Nodes 2.0 DOM-widget width synchronization. Thanks to `permissionnine9`.
+- **2026-10-08** — Merged community [PR #17](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/pull/17) (`spill-seg-offload`), adding per-segment frame eviction and optional FP16 merged-frame storage. Thanks to `FangZhangTNS`.
+- **2026-10-14** — Added **MiniMax H3 Low-Memory Segment Video Sampler** and its example workflow. It decodes, encodes, and releases each segment before encoded-video assembly; uploaded image/audio delete controls now stay clickable above drag surfaces.
+
 An editable reference-media timeline for ComfyUI's native **MiniMax H3 Reference to Video** workflow. It brings reference videos, paired soundtracks, fixed Guides, standalone images, and standalone audio into one compact editing surface.
 
 > Video-generation agents should read the [Chinese segmented long-video guide](docs/AGENT_LONG_VIDEO_GUIDE_CN.md).
@@ -105,12 +113,20 @@ An editable reference-media timeline for ComfyUI's native **MiniMax H3 Reference
 | **MiniMax H3 Material Planner** | Edits media and outputs a compact H3 plan plus an ordered Omni media bundle. |
 | **MiniMax H3 Omni Media-Bundle Prompt Bridge** | Sends the bundle to an installed Prompt Rewriter Omni backend and returns only `rewritten_prompt`. |
 | **MiniMax H3 Finite Segment Sampling** | Expands an acyclic graph for direct-latent continuation, masking, sampling, deduplication, and assembly. |
+| **MiniMax H3 Low-Memory Segment Video Sampler** | Decodes and encodes one segment at a time in ComfyUI's temporary folder, then joins encoded segments as `VIDEO`; no latent checkpoints or rerun state. |
 | **MiniMax H3 native-loop node set** | Splits segment selection, continuation preparation, sampling, and assembly for free composition inside ComfyUI `Start Loop / End Loop`. |
 | **MiniMax H3 Preset Export** | Connects to Material Plan or Segment Plan and saves configuration-only or complete media-bearing preset folders. |
 | **MiniMax H3 Local Preset Loader** | Finds local presets and feeds the Material Planner's new Import Preset input. |
 | **MiniMax H3 Timeline Director (Compatibility)** | Preserves the original all-in-one workflow and older saved workflows. |
 
 Long-video generation needs only **Material Planner Segment Plan → Finite Segment Sampling**. The Plan Encoder is also public now so native Loop workflows can place it explicitly inside the loop body.
+
+For long or high-resolution output, use **MiniMax H3 Low-Memory Segment Video Sampler** and connect its
+`Final Video` directly to `SaveVideo`. It never creates one full RGB-frame tensor: each decoded segment is
+immediately encoded to a temporary MP4 and released, then the encoded sources are joined. Segment files are
+removed after assembly, the final temporary file is cleaned when its VIDEO object is released, and stale
+24-hour spill folders are removed on the next run. See
+[the all-in-one low-memory workflow](example_workflows/MiniMaxH3全功能合一低内存视频输出工作流.json).
 
 ### Local presets
 
@@ -168,7 +184,7 @@ No extra pip dependency is declared. The plugin uses PyAV, Pillow, NumPy, PyTorc
 
 ## Example workflows
 
-The plugin ships three example workflows. The first is the normal generation entry point, the second adds Omni prompt expansion, and the third demonstrates finite-segment generation with ComfyUI's native Loop nodes.
+The plugin ships four example workflows: the normal all-in-one entry point, low-memory long-video output, Omni prompt expansion, and finite-segment generation with ComfyUI's native Loop nodes.
 
 ### 1. All-in-One Full Timeline Director (recommended)
 
@@ -189,7 +205,13 @@ Connect the Material Planner's **Segment Plan** directly to **MiniMax H3 Finite 
 
 > The plugin does not auto-segment by reference-media duration or infer whether character identity should continue. Segment ranges, overlaps, and assignments are explicitly controlled on the timeline. For character replacement, use **Editable Reference** in most cases.
 
-### 2. Timeline planning with Prompt generation
+### 2. All-in-One low-memory video output
+
+[Download workflow](example_workflows/MiniMaxH3全功能合一低内存视频输出工作流.json)
+
+This keeps the complete Material Planner and the same one-/two-stage seam logic, but uses **MiniMax H3 Low-Memory Segment Video Sampler**. Every finished segment is decoded, encoded to temporary video, and released immediately; the node sends `VIDEO` directly to `SaveVideo`, making it suitable for longer or higher-resolution runs.
+
+### 3. Timeline planning with Prompt generation
 
 [Download workflow](example_workflows/MiniMax_H3时间规划+Prompt提示词生成.json)
 
@@ -197,7 +219,7 @@ This variant adds the **MiniMax H3 Omni Media-Bundle Prompt Bridge**, allowing P
 
 > This workflow requires [MiniMax-H3-Prompt-Rewriter-ComfyUI](https://github.com/pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI). Follow that project for model, quantization, and VRAM requirements.
 
-### 3. Native Loop finite-segment example
+### 4. Native Loop finite-segment example
 
 [Download workflow](example_workflows/MiniMaxH3原生Loop有限分段示例工作流.json)
 

@@ -207,10 +207,10 @@ function installStyles() {
       color:#91f1d7; background:#103b34; font-size:9px; }
     .m3td-asset-tag { position:absolute; left:3px; top:2px; z-index:2; padding:1px 3px; border-radius:3px;
       color:#fff4c9; background:#111c; font-size:10px; font-weight:700; }
-    .m3td-asset-name { position:absolute; left:3px; right:3px; bottom:2px; padding:1px 2px; overflow:hidden; text-overflow:ellipsis;
+    .m3td-asset-name { position:absolute; left:3px; right:3px; bottom:2px; padding:1px 2px; overflow:hidden; text-overflow:ellipsis; pointer-events:none;
       white-space:nowrap; background:#000a; color:#fff; font-size:10px; }
     .m3td-asset-x { position:absolute; right:2px; top:2px; width:17px; height:17px; border:0; border-radius:50%; color:#fff;
-      background:#9c3345cc; cursor:pointer; }
+      background:#9c3345cc; cursor:pointer; z-index:20; pointer-events:auto; }
     .m3td-segments { padding:8px; border-top:1px solid var(--line); background:#0d1219; }
     .m3td-segments[hidden] { display:none; }
     .m3td-segment-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:7px;
@@ -1304,10 +1304,10 @@ class TimelineDirectorUI {
     const audioBin = this.root.querySelector('[data-bin="audios"]');
     this.root.querySelectorAll(".m3td-bin-title span:first-child")[0].textContent = tr("independentImages",{count:this.state.images.length});
     this.root.querySelectorAll(".m3td-bin-title span:first-child")[1].textContent = tr("independentAudio",{count:this.state.audios.length});
-    imageBin.innerHTML = this.state.images.map((a,i) => `<div class="m3td-asset" draggable="true" data-asset-id="${esc(a.id)}" data-asset-kind="images" title="${esc(tr("dragReorder"))}"><img draggable="false" src="${esc(viewURL(a.file))}"><span class="m3td-asset-tag">&lt;Picture ${i+1}&gt;</span><span class="m3td-asset-name">${esc(a.name)}</span><button draggable="false" class="m3td-asset-x" data-remove-image="${esc(a.id)}">×</button></div>`).join("");
-    audioBin.innerHTML = this.state.audios.map((a,i) => {const ordinal=this.state.audios.slice(0,i+1).filter(item=>item.audioMode!=="locked").length;return `<div class="m3td-asset audio" draggable="true" data-asset-id="${esc(a.id)}" data-asset-kind="audios" title="${esc(tr("audioModeHelp"))}"><span class="m3td-asset-tag">${a.audioMode==="locked"?esc(tr("lockedAudio")):`&lt;Audio ${ordinal}&gt;`}</span><select draggable="false" class="m3td-audio-mode ${a.audioMode==="locked"?"locked":""}" data-audio-mode="${esc(a.id)}"><option value="reference" ${a.audioMode!=="locked"?"selected":""}>${esc(tr("audioModeReference"))}</option><option value="locked" ${a.audioMode==="locked"?"selected":""}>${esc(tr("audioModeLocked"))}</option></select><span class="m3td-asset-name">${esc(a.name)}</span><button draggable="false" class="m3td-asset-x" data-remove-audio="${esc(a.id)}">×</button></div>`;}).join("");
-    for (const b of imageBin.querySelectorAll("[data-remove-image]")) b.onclick=e=>{e.stopPropagation();this.state.images=this.state.images.filter(a=>a.id!==b.dataset.removeImage);this.pruneSegmentAssignments();this.sync();this.render();};
-    for (const b of audioBin.querySelectorAll("[data-remove-audio]")) b.onclick=e=>{e.stopPropagation();this.state.audios=this.state.audios.filter(a=>a.id!==b.dataset.removeAudio);this.pruneSegmentAssignments();this.sync();this.render();};
+    imageBin.innerHTML = this.state.images.map((a,i) => `<div class="m3td-asset" draggable="true" data-asset-id="${esc(a.id)}" data-asset-kind="images" title="${esc(tr("dragReorder"))}"><img draggable="false" src="${esc(viewURL(a.file))}"><span class="m3td-asset-tag">&lt;Picture ${i+1}&gt;</span><span class="m3td-asset-name">${esc(a.name)}</span><button type="button" draggable="false" class="m3td-asset-x" data-remove-image="${esc(a.id)}">×</button></div>`).join("");
+    audioBin.innerHTML = this.state.audios.map((a,i) => {const ordinal=this.state.audios.slice(0,i+1).filter(item=>item.audioMode!=="locked").length;return `<div class="m3td-asset audio" draggable="true" data-asset-id="${esc(a.id)}" data-asset-kind="audios" title="${esc(tr("audioModeHelp"))}"><span class="m3td-asset-tag">${a.audioMode==="locked"?esc(tr("lockedAudio")):`&lt;Audio ${ordinal}&gt;`}</span><select draggable="false" class="m3td-audio-mode ${a.audioMode==="locked"?"locked":""}" data-audio-mode="${esc(a.id)}"><option value="reference" ${a.audioMode!=="locked"?"selected":""}>${esc(tr("audioModeReference"))}</option><option value="locked" ${a.audioMode==="locked"?"selected":""}>${esc(tr("audioModeLocked"))}</option></select><span class="m3td-asset-name">${esc(a.name)}</span><button type="button" draggable="false" class="m3td-asset-x" data-remove-audio="${esc(a.id)}">×</button></div>`;}).join("");
+    for (const b of imageBin.querySelectorAll("[data-remove-image]")) {b.onpointerdown=e=>e.stopPropagation();b.onclick=e=>{e.stopPropagation();this.state.images=this.state.images.filter(a=>a.id!==b.dataset.removeImage);this.pruneSegmentAssignments();this.sync();this.render();};}
+    for (const b of audioBin.querySelectorAll("[data-remove-audio]")) {b.onpointerdown=e=>e.stopPropagation();b.onclick=e=>{e.stopPropagation();this.state.audios=this.state.audios.filter(a=>a.id!==b.dataset.removeAudio);this.pruneSegmentAssignments();this.sync();this.render();};}
     for (const select of audioBin.querySelectorAll("[data-audio-mode]")) {
       for(const event of ["pointerdown","click","wheel"])select.addEventListener(event,e=>e.stopPropagation());
       select.onchange=()=>{const asset=this.state.audios.find(a=>String(a.id)===String(select.dataset.audioMode));if(!asset)return;asset.audioMode=select.value==="locked"?"locked":"reference";this.sync();this.render();this.setStatus(tr(asset.audioMode==="locked"?"audioModeLocked":"audioModeReference"));};
@@ -1393,7 +1393,7 @@ class TimelineDirectorUI {
       <span class="m3td-asset-tag">${!isImage&&asset.audioMode==="locked"?esc(tr("lockedAudio")):`&lt;${isImage?"Picture":"Audio"} ${isImage?localIndex+1:audioOrdinal}&gt;`}</span>
       ${!isImage&&asset.audioMode==="locked"?`<span class="m3td-mode-badge">LOCK</span>`:""}
       <span class="m3td-asset-name">${esc(asset.name)}</span>
-      <button draggable="false" class="m3td-asset-x" data-remove-segment-asset="${esc(id)}">×</button></div>`;
+      <button type="button" draggable="false" class="m3td-asset-x" data-remove-segment-asset="${esc(id)}">×</button></div>`;
   }
 
   renderSegments() {
@@ -1423,12 +1423,12 @@ class TimelineDirectorUI {
       // Keep text editing inside the DOM widget under Nodes 2.0.
       for(const event of ["pointerdown","keydown","keyup"])input.addEventListener(event,e=>e.stopPropagation());
     }
-    for(const button of list.querySelectorAll("[data-remove-segment-asset]"))button.onclick=event=>{
+    for(const button of list.querySelectorAll("[data-remove-segment-asset]")){button.onpointerdown=event=>event.stopPropagation();button.onclick=event=>{
       event.stopPropagation();
       const card=button.closest("[data-segment-asset]"),segment=this.state.segmentConfig.segments[num(card.dataset.segmentIndex)];
       segment[card.dataset.segmentKind]=segment[card.dataset.segmentKind].filter(id=>String(id)!==String(card.dataset.segmentAsset));
       this.sync();this.render();
-    };
+    };}
     const clear=()=>{for(const item of list.querySelectorAll(".drag-over,.drop-before,.drop-after,.dragging"))item.classList.remove("drag-over","drop-before","drop-after","dragging");};
     const place=(kind,segmentIndex,targetId=null,after=true)=>{
       if(!this.assetDrag||this.assetDrag.kind!==kind)return false;

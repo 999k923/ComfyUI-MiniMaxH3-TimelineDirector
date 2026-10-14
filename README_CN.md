@@ -62,6 +62,14 @@
   <a href="https://www.youtube.com/@shixiongsong">YouTube</a>
 </p>
 
+## 功能更新时间线
+
+- **2026-08**：发布素材时间线、参考素材编排、分段提示词与有限分段长视频基础能力。
+- **2026-09**：加入全功能合一工作流、原音锁定数字人、SelfLift 二采、低清/高清双层续接、本地预设和 ComfyUI 原生 Loop 节点组。
+- **2026-09-15**：合并社区 [PR #9](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/pull/9)，修复 Nodes 2.0 下时间线 DOM 控件宽度同步；感谢 `permissionnine9` 的贡献。
+- **2026-10-08**：合并社区 [PR #17](https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector/pull/17)（`spill-seg-offload`），加入逐段帧卸载及可选 FP16 合并缓存；感谢 `FangZhangTNS` 的贡献。
+- **2026-10-14**：新增“MiniMax H3 有限分段采样(低内存版本)”与配套示例工作流，逐段解码、编码和清理后再合并视频；同时修复图片/音频删除按钮被拖拽层遮挡的问题。
+
 一个为 ComfyUI 原生 **MiniMax H3 Reference to Video** 工作流设计的可视化参考素材时间线。它将参考视频、视频原声、固定 Guide、独立图片和独立音频集中到一个类似剪辑软件的界面中。
 
 > 视频生成 Agent 请阅读：[长视频分段生成 Agent 操作规范](docs/AGENT_LONG_VIDEO_GUIDE_CN.md)
@@ -92,6 +100,7 @@
 | **MiniMax H3 素材规划台** | 编辑素材并输出紧凑的 `素材规划` 与 `Omni素材包`。 |
 | **MiniMax H3 Omni 素材包提示词桥** | 将规划台素材送入已安装的 Prompt Rewriter Omni，并只输出 `rewritten_prompt`。 |
 | **MiniMax H3 有限分段采样** | 展开普通无环执行图，完成直接 Latent 续写、时间遮罩、采样、去重和合并。 |
+| **MiniMax H3 有限分段采样(低内存版本)** | 每段单独解码并写入 ComfyUI 临时目录，最终直接合并为 `VIDEO`；不保存 Latent，也不提供片段重跑。 |
 | **MiniMax H3 原生循环分段节点组** | 把分段选择、续接准备、采样和结果合并拆开，可在 ComfyUI `Start Loop / End Loop` 中自由组合一采、二采和自定义处理。 |
 | **MiniMax H3 导出预设** | 连接“素材规划”或“分段规划”，保存纯配置预设，或保存包含引用视频、图片和音频的完整预设文件夹。 |
 | **MiniMax H3 本地预设加载器** | 检索本地预设并连接到素材规划台新增的“导入预设”输入。 |
@@ -99,6 +108,12 @@
 
 长视频生成只需连接 **素材规划台「分段规划」→ 有限分段采样「有限分段规划」**。
 `MiniMax H3 规划编码器`现在作为公开节点显示，可用于原生 Loop 循环体；旧的一键采样器仍会在内部复用它。
+
+超长或高分辨率视频建议改用 **MiniMax H3 有限分段采样(低内存版本)**，并把它的 `Final Video`
+直接连接 `SaveVideo`。该节点不会构造整条 RGB 帧张量：每段解码完成后立即编码为临时 MP4，释放帧内存，
+最后在编码层合并。分段临时文件会在合并后删除，最终临时文件在 VIDEO 对象释放时清理；超过 24 小时的
+异常遗留目录也会在下次运行时自动清理。可直接打开
+[全功能合一低内存视频输出工作流](example_workflows/MiniMaxH3全功能合一低内存视频输出工作流.json)。
 
 ### 本地预设
 
@@ -166,7 +181,7 @@ git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
 
 ## 示例工作流
 
-插件内置下面三个示例工作流。第一个是日常生成入口，第二个用于需要 Omni 自动扩写提示词的场景，第三个演示如何使用 ComfyUI 原生 Loop 自由搭建有限分段生成。
+插件内置下面四个示例工作流：日常全功能入口、低内存长视频输出、Omni 自动扩写提示词，以及使用 ComfyUI 原生 Loop 自由搭建有限分段生成。
 
 ### 1. 全功能合一完全体导演台（推荐）
 
@@ -187,7 +202,13 @@ git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
 
 > 插件不会按参考媒体时长自动分段，也不会替用户判断角色是否应当续接。分段范围、相邻段重叠和每段素材均由时间线配置决定；人物替换通常应把原视频设为 `可编辑参考`。
 
-### 2. 时间规划 + Prompt 提示词生成
+### 2. 全功能合一低内存视频输出
+
+[下载工作流](example_workflows/MiniMaxH3全功能合一低内存视频输出工作流.json)
+
+保留全功能规划台与一采/二采接缝逻辑，但改用 **MiniMax H3 有限分段采样(低内存版本)**。每段完成后立即解码、编码为临时视频并释放帧内存，最终直接输出 `VIDEO` 给 `SaveVideo`，适合长时长或高分辨率生成。
+
+### 3. 时间规划 + Prompt 提示词生成
 
 [下载工作流](example_workflows/MiniMax_H3时间规划+Prompt提示词生成.json)
 
@@ -195,7 +216,7 @@ git clone https://github.com/Songssx/ComfyUI-MiniMaxH3-TimelineDirector.git
 
 > 使用该工作流前必须安装 [MiniMax-H3-Prompt-Rewriter-ComfyUI](https://github.com/pytraveler/MiniMax-H3-Prompt-Rewriter-ComfyUI)。模型、量化方式及显存要求请参考该项目说明。
 
-### 3. 原生 Loop 有限分段示例
+### 4. 原生 Loop 有限分段示例
 
 [下载工作流](example_workflows/MiniMaxH3原生Loop有限分段示例工作流.json)
 

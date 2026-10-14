@@ -25,6 +25,12 @@ from .minimax_h3_finite_segments import (
 )
 from .selflift_runtime import SelfLiftH3Sampler
 from .preset_nodes import MiniMaxH3PresetExporter, MiniMaxH3PresetLoader
+from .segment_video_sampler import (
+    MiniMaxH3FiniteSegmentVideoSampler,
+    MiniMaxH3SegmentVideoArchive,
+    MiniMaxH3SegmentVideoInitialize,
+    MiniMaxH3SegmentVideoOutput,
+)
 
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TimelineDirector": MiniMaxH3TimelineDirector,
@@ -49,6 +55,10 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TimelineSelfLiftSampler": SelfLiftH3Sampler,
     "MiniMaxH3PresetLoader": MiniMaxH3PresetLoader,
     "MiniMaxH3PresetExporter": MiniMaxH3PresetExporter,
+    "MiniMaxH3FiniteSegmentVideoSampler": MiniMaxH3FiniteSegmentVideoSampler,
+    "MiniMaxH3SegmentVideoInitialize": MiniMaxH3SegmentVideoInitialize,
+    "MiniMaxH3SegmentVideoArchive": MiniMaxH3SegmentVideoArchive,
+    "MiniMaxH3SegmentVideoOutput": MiniMaxH3SegmentVideoOutput,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -74,6 +84,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3TimelineSelfLiftSampler": "MiniMax H3 Two-Stage Sampler",
     "MiniMaxH3PresetLoader": "MiniMax H3 Local Preset Loader",
     "MiniMaxH3PresetExporter": "MiniMax H3 Preset Export",
+    "MiniMaxH3FiniteSegmentVideoSampler": "MiniMax H3 有限分段采样(低内存版本)",
+    "MiniMaxH3SegmentVideoInitialize": "MiniMax H3 Initialize Temporary Segment Video",
+    "MiniMaxH3SegmentVideoArchive": "MiniMax H3 Archive Temporary Segment Video",
+    "MiniMaxH3SegmentVideoOutput": "MiniMax H3 Finish Temporary Segment Video",
 }
 
 WEB_DIRECTORY = "./js"
