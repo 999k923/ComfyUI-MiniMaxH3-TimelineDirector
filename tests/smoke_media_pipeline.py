@@ -54,7 +54,9 @@ def main() -> None:
     assert ("POST", "/minimax_h3_timeline/preview_proxy") in registered_routes
     assert not any(path == "/minimax_h3_timeline/upload_chunk" for _, path in registered_routes)
     assert not any(
-        method == "GET" and path.startswith("/minimax_h3_timeline/")
+        method == "GET"
+        and path.startswith("/minimax_h3_timeline/")
+        and path != "/minimax_h3_timeline/presets/list"
         for method, path in registered_routes
     )
     video, image, audio = sys.argv[1:]
@@ -77,6 +79,8 @@ def main() -> None:
             "trimStart": 0.0,
             "sourceDuration": 10.0,
             "hasAudio": True,
+            "referenceWidth": 256,
+            "referenceHeight": 160,
         }],
         "images": [{"file": image}],
         "audios": [{"file": audio, "trimStart": 0.0, "duration": 3.0}],
@@ -84,6 +88,10 @@ def main() -> None:
     # Reference media must be bounded to the node generation canvas before it
     # reaches the official H3 VAE path (protects against 4K/8K uploads).
     target_width, target_height = 320, 192
+    assert backend._reference_size({}, target_width, target_height) == (320, 192)
+    assert backend._reference_size(
+        {"referenceWidth": 512, "referenceHeight": 360}, target_width, target_height
+    ) == (512, 352)
     images, videos, paired_audio, standalone_audio, guides = backend._build_references(
         timeline, target_width, target_height, backend._aligned_h3_length(5.0)
     )
@@ -93,7 +101,7 @@ def main() -> None:
     )
     assert torch.allclose(images["ref_image_0"], expected_picture_1), "independent image must be Picture 1"
     assert len(videos) == 1, "only the cyan-range intersection may become a Video ref"
-    assert videos["ref_video_0"].shape == (120, target_height, target_width, 3)
+    assert videos["ref_video_0"].shape == (120, 160, 256, 3)
     assert all(image.shape == (1, target_height, target_width, 3) for image in images.values())
     assert len(paired_audio) == 1
     assert guides[0]["frame_idx"] == 0

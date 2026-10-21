@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- Add independent per-video reference width and height controls. Values are aligned to H3's 32-pixel grid and flow through reference-video and Guide decoding without changing the generated-video canvas.
 - Add a low-memory finite segment VIDEO sampler that encodes each decoded segment to ComfyUI's temporary directory and joins encoded sources without retaining the full RGB timeline. It saves no latent checkpoints and cleans temporary spill files.
 - Add a matching all-in-one low-memory example workflow that connects the sampler's `VIDEO` output directly to `SaveVideo`.
 - Add local configuration-only and complete-media preset folders, a preset browser/loader node, an export node accepting either Material Plan or Segment Plan, and an editable preset-import input on Material Planner.
@@ -17,6 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- New video uploads default to Editable Reference. Remove the Material Planner's Global Prompt textarea in favor of the per-segment prompt editors while retaining old serialized prompt data for workflow compatibility.
 - Make the H3 Plan Encoder and bundled H3 Two-Stage Sampler visible for explicit native Loop workflow construction.
 - Keep the original Finite Segment Sampler as a backward-compatible one-node workflow path.
 

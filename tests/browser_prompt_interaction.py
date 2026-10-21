@@ -24,12 +24,7 @@ with sync_playwright() as p:
             }''',kind)
             page.wait_for_timeout(1500)
             global_prompt=page.locator('[data-global-prompt]')
-            if kind.endswith('Planner'):
-                assert global_prompt.count()==1,(vue,kind,'global prompt missing')
-                global_prompt.fill('Shared prompt')
-                assert page.evaluate('()=>JSON.parse(n.widgets.find(w=>w.name==="timeline_data").value).globalPrompt')=='Shared prompt'
-            else:
-                assert global_prompt.count()==0,(vue,kind,'compatibility director must not duplicate its native prompt')
+            assert global_prompt.count()==0,(vue,kind,'global prompt input must not be rendered')
             if kind.endswith('Director'):
                 native=page.locator('textarea:visible').first
                 before={'height':native.bounding_box()['height']}

@@ -810,7 +810,24 @@ def _reference_mode(clip: dict[str, Any]) -> str:
     return mode if mode in {"guide", "edit", "boundary"} else "guide"
 
 
-def _video_reference_specs(timeline: dict[str, Any]) -> list[dict[str, Any]]:
+def _reference_size(
+    clip: dict[str, Any], fallback_width: Any, fallback_height: Any
+) -> tuple[int, int]:
+    """Resolve one clip's user-selected reference canvas on H3's 32px grid."""
+
+    def dimension(key: str, fallback: Any) -> int:
+        value = int(_float(clip.get(key)))
+        if value < h3_nodes.CANVAS_MULTIPLE:
+            value = max(h3_nodes.CANVAS_MULTIPLE, int(_float(fallback)))
+        value = round(value / h3_nodes.CANVAS_MULTIPLE) * h3_nodes.CANVAS_MULTIPLE
+        return max(h3_nodes.CANVAS_MULTIPLE, min(16384, value))
+
+    return dimension("referenceWidth", fallback_width), dimension("referenceHeight", fallback_height)
+
+
+def _video_reference_specs(
+    timeline: dict[str, Any], target_width: Any = None, target_height: Any = None
+) -> list[dict[str, Any]]:
     """Describe prompt-addressable videos without decoding their frames.
 
     This is shared by the material planner and the H3 encoder, so ``Video N``
@@ -836,6 +853,11 @@ def _video_reference_specs(timeline: dict[str, Any]) -> list[dict[str, Any]]:
             continue
 
         overlap_source_start = _source_time(clip, overlap_start)
+        reference_width, reference_height = _reference_size(
+            clip,
+            target_width if target_width is not None else 1344,
+            target_height if target_height is not None else 768,
+        )
         for source_start, piece_duration in _windows(
             overlap_source_start, overlap_end - overlap_start
         ):
@@ -849,6 +871,8 @@ def _video_reference_specs(timeline: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_start": source_start,
                 "duration": piece_duration,
                 "has_audio": audio_enabled and clip.get("hasAudio", True) is not False,
+                "reference_width": reference_width,
+                "reference_height": reference_height,
             })
             if len(specs) >= MAX_REF_VIDEOS:
                 return specs
@@ -1248,10 +1272,10 @@ def _build_references(
     # Decode the exact intervals advertised by the planning node.  Keeping this
     # as one shared plan guarantees Video/Audio ordinals cannot drift between
     # prompt rewriting and the final H3 encode.
-    for spec in _video_reference_specs(timeline):
+    for spec in _video_reference_specs(timeline, target_width, target_height):
         reference_frames = _decode_video(
             _safe_input_path(spec["file"]), spec["source_start"], spec["duration"],
-            FPS, target_width, target_height,
+            FPS, spec.get("reference_width", target_width), spec.get("reference_height", target_height),
         )
         if reference_frames is None or reference_frames.shape[0] < 5:
             continue
@@ -1276,6 +1300,7 @@ def _build_references(
             continue
         path = _safe_input_path(str(clip["file"]))
         mode = _reference_mode(clip)
+        reference_width, reference_height = _reference_size(clip, target_width, target_height)
 
         if mode in {"edit", "boundary"}:
             if mode == "boundary":
@@ -1286,7 +1311,7 @@ def _build_references(
                 if abs(overlap_end - selection_end) <= 0.5 / FPS:
                     last_idx = target_length - 1
                 first_frame = _decode_frame(
-                    path, _source_time(clip, overlap_start), target_width, target_height
+                    path, _source_time(clip, overlap_start), reference_width, reference_height
                 )
                 if first_frame is not None:
                     guides.append({
@@ -1296,7 +1321,7 @@ def _build_references(
                 if last_idx != first_idx:
                     last_frame = _decode_frame(
                         path, _source_time(clip, max(overlap_start, overlap_end - 1.0 / FPS)),
-                        target_width, target_height,
+                        reference_width, reference_height,
                     )
                     if last_frame is not None:
                         guides.append({
@@ -1322,7 +1347,7 @@ def _build_references(
             )
             frames = _decode_video(
                 path, _source_time(clip, overlap_start) + decoded_frames / FPS,
-                requested_frames / FPS, FPS, target_width, target_height,
+                requested_frames / FPS, FPS, reference_width, reference_height,
             )
             if frames is None or not frames.shape[0]:
                 break
@@ -1349,9 +1374,10 @@ def _build_references(
     # A true gap has no video reference. Its nearest visual context is anchored
     # as target first/last frames with the official Add Guide mechanism.
     for clip, timeline_second, frame_idx, kind in _pick_gap_guides(clips, selection_start, selection_end):
+        reference_width, reference_height = _reference_size(clip, target_width, target_height)
         frame = _decode_frame(
             _safe_input_path(str(clip["file"])), _source_time(clip, timeline_second),
-            target_width, target_height,
+            reference_width, reference_height,
         )
         if frame is not None:
             guides.append({"image": frame, "audio": None, "frame_idx": 0 if frame_idx == 0 else target_length - 1, "kind": kind})

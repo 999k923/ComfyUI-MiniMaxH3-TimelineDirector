@@ -87,6 +87,7 @@ An editable reference-media timeline for ComfyUI's native **MiniMax H3 Reference
 ## Highlights
 
 - Multi-clip timeline with move, trim, split, delete, snapping, and numeric positioning.
+- Independent reference width/height controls for every uploaded video. Sizes align to 32 pixels, reducing reference-latent work without changing the generated canvas; new uploads default to Editable Reference.
 - Only media intersecting the cyan generation range participates in the current reference or Guide plan.
 - Three per-clip modes: `Fixed Guide`, `Editable Reference`, and `Boundary Only`.
 - Native text-to-video: with no uploaded media and no segment windows, Finite Segment Sampling internally creates a standard empty H3 AV latent from the Global Prompt and current GEN duration. Manual windows extend the same path to long-form T2V.
